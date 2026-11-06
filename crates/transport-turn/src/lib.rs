@@ -1717,9 +1717,10 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
 
     /// Writes due Allocation IDs into caller storage.
     ///
-    /// At most `min(max_scan, CAPACITY, output.len())` slots are inspected.
-    /// Returned timers are cleared and must be rescheduled after protocol poll.
-    /// The cursor advances after every inspected slot to prevent starvation.
+    /// At most `min(max_scan, CAPACITY)` slots are inspected, and at most
+    /// `output.len()` Allocation IDs are written. Returned entries are cleared
+    /// and must be rescheduled after protocol poll. The cursor advances after
+    /// every inspected slot to prevent starvation.
     pub fn take_due(&mut self, now: MonotonicTime, output: &mut [u16], max_scan: usize) -> usize {
         if CAPACITY == 0 || output.is_empty() || self.len == 0 {
             return 0;
@@ -1778,6 +1779,31 @@ mod reactor_tests {
         assert_eq!(reactor.take_due(MonotonicTime(150), &mut due, 3), 1);
         assert_eq!(due[0], 10);
         assert_eq!(reactor.next_deadline(), Some(MonotonicTime(200)));
+    }
+
+    #[test]
+    fn reactor_scan_budget_is_independent_of_output_capacity() {
+        let mut reactor = TurnUdpReactor::<4>::new();
+        reactor.register(1).unwrap();
+        reactor.register(2).unwrap();
+        reactor.register(3).unwrap();
+        reactor.schedule(3, MonotonicTime(10)).unwrap();
+
+        let mut due = [0; 1];
+        assert_eq!(reactor.take_due(MonotonicTime(10), &mut due, 3), 1);
+        assert_eq!(due[0], 3);
+        assert_eq!(reactor.next_deadline(), None);
+    }
+
+    #[test]
+    fn reactor_scan_budget_is_zero_when_requested() {
+        let mut reactor = TurnUdpReactor::<1>::new();
+        reactor.register(9).unwrap();
+        reactor.wake(9).unwrap();
+
+        let mut due = [0; 1];
+        assert_eq!(reactor.take_due(MonotonicTime(0), &mut due, 0), 0);
+        assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Ready);
     }
 
     #[test]
