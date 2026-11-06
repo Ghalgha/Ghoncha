@@ -189,9 +189,8 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
                     kind: DispatchKind::AffinityHit,
                 });
             }
-            if self.entries[index].is_none() {
-                break;
-            }
+            // Deletions can leave holes in a linear-probing cluster. Scan the
+            // full bounded table so entries behind a retired worker stay visible.
         }
         None
     }
@@ -466,6 +465,38 @@ mod tests {
         assert_eq!(dispatcher.assigned_flows(first.worker_id), 0);
         let next = dispatcher.dispatch(key(5353), 2, &WORKERS).unwrap();
         assert_eq!(next.kind, DispatchKind::NewFlow);
+    }
+
+    #[test]
+    fn lookup_survives_a_deleted_entry_before_a_colliding_flow() {
+        let workers = [
+            Worker { id: 10, eligible: true },
+            Worker { id: 20, eligible: true },
+        ];
+        let mut dispatcher = FlowDispatcher::<8>::new();
+        let first = (1..=u16::MAX)
+            .map(key)
+            .find(|candidate| candidate.stable_hash() as usize % 8 == key(1).stable_hash() as usize % 8)
+            .unwrap();
+        let second = (1..=u16::MAX)
+            .map(key)
+            .find(|candidate| {
+                candidate != &first
+                    && candidate.stable_hash() as usize % 8 == first.stable_hash() as usize % 8
+            })
+            .unwrap();
+
+        dispatcher.dispatch_to(first, 1, &workers, 10).unwrap();
+        dispatcher.dispatch_to(second, 1, &workers, 20).unwrap();
+        assert_eq!(dispatcher.forget_worker(10), 1);
+
+        assert_eq!(
+            dispatcher.lookup_existing(second, 2, &workers),
+            Some(DispatchDecision {
+                worker_id: 20,
+                kind: DispatchKind::AffinityHit,
+            })
+        );
     }
 
     #[test]
