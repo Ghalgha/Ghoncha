@@ -711,6 +711,7 @@ mod tests {
             manager.admit_new_flow(true, 1),
             AdmissionDecision::Backpressure
         );
+        manager.confirm_deallocation(1).unwrap();
         let retired = manager.take_drained(1).unwrap();
         assert_eq!(retired.local_addr().port(), 40001);
     }
