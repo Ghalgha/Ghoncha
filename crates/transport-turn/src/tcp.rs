@@ -343,7 +343,6 @@ mod tests {
     }
 }
 
-
 /// Non-blocking byte-stream operations required by the TURN TCP driver.
 ///
 /// The socket must already be connected to the configured TURN server, bound
