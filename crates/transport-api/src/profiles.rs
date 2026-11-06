@@ -173,10 +173,7 @@ impl ConnectionProfile {
     /// burst. Standard ramps toward 35 flows (30–40 range). Unlimited starts
     /// at one and lets the measured-goodput controller scale up to the adapter
     /// maximum. EnergySaving starts and idles at one, scaling only on demand.
-    pub const fn resolve(
-        self,
-        capabilities: FlowCapabilities,
-    ) -> Result<FlowPlan, FlowPlanError> {
+    pub const fn resolve(self, capabilities: FlowCapabilities) -> Result<FlowPlan, FlowPlanError> {
         let maximum = capabilities.max_independent_flows;
         if maximum == 0 {
             return Err(FlowPlanError::NoIndependentFlows);
@@ -269,9 +266,7 @@ impl FlowPlan {
                 let capacity_pressure =
                     observation.requested_goodput_bps > observation.aggregate_goodput_bps;
 
-                if (queue_pressure || capacity_pressure)
-                    && current_flows < self.maximum_flows
-                {
+                if (queue_pressure || capacity_pressure) && current_flows < self.maximum_flows {
                     self.next_increase(current_flows)
                 } else if !queue_pressure
                     && !capacity_pressure
@@ -391,7 +386,10 @@ mod tests {
         assert_eq!(plan.minimum_flows, 1);
         assert_eq!(plan.initial_target_flows, 1);
         assert_eq!(plan.maximum_flows, 100);
-        assert_eq!(plan.scaling_policy, FlowScalingPolicy::MaximizeUsefulGoodput);
+        assert_eq!(
+            plan.scaling_policy,
+            FlowScalingPolicy::MaximizeUsefulGoodput
+        );
         assert_eq!(plan.recommend_next_count(1, OBSERVATION), Some(2));
 
         let useful_gain = FlowObservation {
@@ -530,10 +528,7 @@ mod tests {
             saving.reconfiguration(35),
             FlowReconfiguration::Drain { count: 34 }
         );
-        assert_eq!(
-            saving.reconfiguration(1),
-            FlowReconfiguration::Unchanged
-        );
+        assert_eq!(saving.reconfiguration(1), FlowReconfiguration::Unchanged);
     }
 
     #[test]
