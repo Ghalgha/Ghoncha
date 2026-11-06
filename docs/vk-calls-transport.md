@@ -151,7 +151,23 @@ Measure:
 
 Do not publish a speed ranking until repeated real-device measurements exist. Do not assume video mode is more reliable merely because media packets pass through an SFU.
 
-## 9. Decision gates
+## 9. Rust WebRTC implementation candidates
+
+The VK adapter should remain in the Rust Core. Do not introduce a Go runtime or a second VPN packet engine solely because an external reference project uses Pion.
+
+Evaluate two maintained Rust WebRTC candidates for the standalone VK prototype:
+
+- **webrtc-rs `webrtc` (docs observed at v0.21.1):** async-friendly and runtime-agnostic, built over a Sans-I/O `rtc` core. Its documented API includes peer connections, ICE/DTLS/SCTP, DataChannels, media tracks, and send-buffer backpressure. It is the preferred first interoperability prototype because its PeerConnection/DataChannel API is close to the WebRTC programming model used by VK's browser SDK and Pion. Test Android NDK cross-compilation, TLS/crypto provider compatibility, runtime footprint, event scheduling, and shutdown behavior before adoption.
+  - https://docs.rs/webrtc/latest/webrtc/
+  - https://github.com/webrtc-rs/webrtc
+
+- **str0m (docs observed at v0.25.0):** Sans-I/O WebRTC with no internal threads or async tasks; it supports DataChannels, ICE, DTLS, SCTP, and TURN integration. Its explicit poll/drain loop may provide tighter control over allocations, scheduling, and Android wakeups. Its API is intentionally not the browser `RTCPeerConnection` model, and its own documentation notes that its P2P use case has received less testing than its SFU use case. Evaluate it as a performance/control alternative, not as an assumed drop-in replacement.
+  - https://docs.rs/str0m/latest/str0m/
+  - https://github.com/algesten/str0m
+
+Prototype both against the same VK call topology and test cases. Compare successful negotiation, DataChannel interoperability, media-track publishing/receiving, ICE restart, TURN candidate handling, Android cross-build, binary size, peak and steady-state memory, CPU, allocations, throughput, p95/p99 latency, battery, and recovery. Select only after the actual VK path works end-to-end. No crate version is pinned by this design document.
+
+## 10. Decision gates
 
 Before production use:
 1. Verify current VK public API and SDK documentation and supported authentication requirements.
