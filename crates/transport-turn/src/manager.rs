@@ -343,6 +343,7 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize> Default
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ghoncha_flow_dispatch::DispatchKind;
     use ghoncha_packet::{IpAddress, flow::FlowDiscriminator};
 
     fn flow_key() -> FlowKey {
