@@ -21,6 +21,9 @@ pub use profiles::*;
 mod rtp;
 pub use rtp::*;
 
+mod speedtest;
+pub use speedtest::*;
+
 /// Stable, implementation-defined transport identifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TransportId(pub &'static str);
