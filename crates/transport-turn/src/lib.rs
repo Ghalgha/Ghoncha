@@ -55,6 +55,29 @@ pub struct OutboundDatagram {
     pub len: usize,
 }
 
+/// Result of processing one datagram received from the TURN server.
+///
+/// Peer payloads borrow the caller's receive buffer and must be consumed before
+/// that buffer is reused. Non-peer TURN messages are handled by the protocol
+/// state machine and must not be forwarded into the VPN data plane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnReceiveResult<'a> {
+    Handled,
+    Ignored {
+        from: SocketAddr,
+    },
+    PeerData {
+        peer: SocketAddr,
+        payload: &'a [u8],
+    },
+    PeerIcmp {
+        peer: SocketAddr,
+        icmp_type: u8,
+        icmp_code: u8,
+        icmp_data: u32,
+    },
+}
+
 /// A bounded datagram retained until the socket confirms a complete UDP send.
 struct QueuedDatagram<const MAX_DATAGRAM: usize> {
     destination: SocketAddr,
@@ -564,6 +587,41 @@ impl TurnUdpEngine {
         Ok(self.client.recv(transmit, now))
     }
 
+    /// Processes a received TURN datagram and exposes peer payload explicitly.
+    ///
+    /// This is the preferred receive API for a transport driver: it separates
+    /// relayed peer data from TURN control traffic and unrelated datagrams.
+    /// The payload borrows the input buffer and must be consumed before reuse.
+    pub fn receive_datagram<'a>(
+        &mut self,
+        from: SocketAddr,
+        datagram: &'a [u8],
+        now: MonotonicTime,
+    ) -> Result<TurnReceiveResult<'a>, TurnError> {
+        match self.receive_from(from, datagram, now)? {
+            TurnRecvRet::Handled => Ok(TurnReceiveResult::Handled),
+            TurnRecvRet::Ignored(transmit) => Ok(TurnReceiveResult::Ignored {
+                from: transmit.from,
+            }),
+            TurnRecvRet::PeerData(peer_data) => Ok(TurnReceiveResult::PeerData {
+                peer: peer_data.peer,
+                payload: peer_data.data(),
+            }),
+            TurnRecvRet::PeerIcmp {
+                peer,
+                icmp_type,
+                icmp_code,
+                icmp_data,
+                ..
+            } => Ok(TurnReceiveResult::PeerIcmp {
+                peer,
+                icmp_type,
+                icmp_code,
+                icmp_data,
+            }),
+        }
+    }
+
     /// Creates a TURN permission for a peer IP address.
     pub fn create_permission(&mut self, peer: IpAddr, now: MonotonicTime) -> Result<(), TurnError> {
         let now = to_instant(now)?;
@@ -651,6 +709,30 @@ mod tests {
 
     fn destination() -> SocketAddr {
         "198.51.100.1:3478".parse().unwrap()
+    }
+
+    #[test]
+    fn receive_datagram_rejects_packets_from_unconfigured_server() {
+        let mut engine = TurnUdpEngine::new(
+            "192.0.2.10:40000".parse().unwrap(),
+            "198.51.100.1:3478".parse().unwrap(),
+            "test-user",
+            "test-password",
+        )
+        .unwrap();
+        let result = engine
+            .receive_datagram(
+                "203.0.113.9:3478".parse().unwrap(),
+                &[0, 1, 2, 3],
+                MonotonicTime(1),
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            TurnReceiveResult::Ignored {
+                from: "203.0.113.9:3478".parse().unwrap(),
+            }
+        );
     }
 
     #[test]
