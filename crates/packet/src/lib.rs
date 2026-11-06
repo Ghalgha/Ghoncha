@@ -33,6 +33,7 @@ pub enum PacketError {
     TruncatedHeader,
     UnsupportedVersion(u8),
     InvalidIpv4HeaderLength,
+    InvalidIpv4Flags,
     InvalidIpv4TotalLength,
     InvalidIpv6PayloadLength,
     Ipv6JumbogramUnsupported,
@@ -73,6 +74,11 @@ impl<'a> IpPacket<'a> {
         }
         if header_len > bytes.len() {
             return Err(PacketError::TruncatedHeader);
+        }
+
+        let flags_and_offset = u16::from_be_bytes([bytes[6], bytes[7]]);
+        if flags_and_offset & 0x8000 != 0 {
+            return Err(PacketError::InvalidIpv4Flags);
         }
 
         let total_len = usize::from(u16::from_be_bytes([bytes[2], bytes[3]]));
@@ -250,6 +256,19 @@ mod tests {
         assert_eq!(
             IpPacket::parse(&bytes),
             Err(PacketError::InvalidIpv4TotalLength)
+        );
+    }
+
+    #[test]
+    fn rejects_nonzero_reserved_ipv4_flag() {
+        let mut bytes = [0_u8; IPV4_MIN_HEADER_LEN];
+        bytes[0] = 0x45;
+        bytes[2..4].copy_from_slice(&(IPV4_MIN_HEADER_LEN as u16).to_be_bytes());
+        bytes[6..8].copy_from_slice(&0x8000_u16.to_be_bytes());
+
+        assert_eq!(
+            IpPacket::parse(&bytes),
+            Err(PacketError::InvalidIpv4Flags)
         );
     }
 
