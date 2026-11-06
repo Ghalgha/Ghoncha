@@ -322,8 +322,8 @@ mod tests {
 
     #[test]
     fn accepts_incremental_stream_input_without_inventing_datagram_boundaries() {
-        let mut engine = TurnTcpEngine::new(local(), server(), "test-user", "test-password")
-            .unwrap();
+        let mut engine =
+            TurnTcpEngine::new(local(), server(), "test-user", "test-password").unwrap();
 
         // A deliberately incomplete STUN header is buffered by TurnClientTcp.
         assert!(matches!(
