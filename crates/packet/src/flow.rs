@@ -4,6 +4,9 @@
 //! directly visible Fragment header are rejected until a bounded extension
 //! walker is implemented; callers must use a conservative fallback.
 
+#[cfg(test)]
+extern crate std;
+
 use crate::{IpAddress, IpPacket, IpVersion};
 
 /// Stable identity for packets that must remain on the same transport path.
