@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use ghoncha_transport_api::MonotonicTime;
 use ghoncha_transport_turn::{
-    DatagramFlushResult, DatagramSocketError, DatagramSendAttempt, TurnDatagramSocket,
+    DatagramFlushResult, DatagramSendAttempt, DatagramSocketError, TurnDatagramSocket,
     TurnRelayFamilies, TurnUdpDriver, TurnUdpEngine,
 };
 use turn_client_proto::types::Instant;
@@ -277,7 +277,6 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
     }
 }
 
-
 struct MockDatagramSocket {
     local: SocketAddr,
     sent: Vec<(SocketAddr, Vec<u8>)>,
@@ -303,10 +302,7 @@ impl TurnDatagramSocket for MockDatagramSocket {
         Ok(datagram.len())
     }
 
-    fn recv_from(
-        &mut self,
-        buffer: &mut [u8],
-    ) -> Result<(usize, SocketAddr), DatagramSocketError> {
+    fn recv_from(&mut self, buffer: &mut [u8]) -> Result<(usize, SocketAddr), DatagramSocketError> {
         let Some((from, datagram)) = self.inbound.pop_front() else {
             return Err(DatagramSocketError::WouldBlock);
         };
