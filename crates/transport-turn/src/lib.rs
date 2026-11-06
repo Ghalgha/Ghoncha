@@ -228,7 +228,8 @@ impl<
     const MAX_DATAGRAM: usize,
     const CONTROL_MAX_BYTES: usize,
     const PEER_MAX_BYTES: usize,
-> TurnUdpSendQueues<
+>
+    TurnUdpSendQueues<
         CONTROL_CAPACITY,
         PEER_CAPACITY,
         MAX_DATAGRAM,
