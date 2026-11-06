@@ -1616,7 +1616,12 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
 
     /// Registers an Allocation without scheduling an unsolicited timer.
     pub fn register(&mut self, allocation_id: u16) -> Result<(), TurnReactorError> {
-        if self.slots.iter().flatten().any(|slot| slot.allocation_id == allocation_id) {
+        if self
+            .slots
+            .iter()
+            .flatten()
+            .any(|slot| slot.allocation_id == allocation_id)
+        {
             return Err(TurnReactorError::DuplicateAllocation);
         }
         let Some(index) = self.slots.iter().position(Option::is_none) else {
@@ -1658,9 +1663,11 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
 
     /// Removes an Allocation and its timer.
     pub fn unregister(&mut self, allocation_id: u16) -> Result<(), TurnReactorError> {
-        let Some(index) = self.slots.iter().position(|entry| {
-            entry.is_some_and(|slot| slot.allocation_id == allocation_id)
-        }) else {
+        let Some(index) = self
+            .slots
+            .iter()
+            .position(|entry| entry.is_some_and(|slot| slot.allocation_id == allocation_id))
+        else {
             return Err(TurnReactorError::UnknownAllocation);
         };
         self.slots[index] = None;
@@ -1685,12 +1692,7 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
     /// At most `min(max_scan, CAPACITY, output.len())` slots are inspected.
     /// Returned timers are cleared and must be rescheduled after protocol poll.
     /// The cursor advances after every inspected slot to prevent starvation.
-    pub fn take_due(
-        &mut self,
-        now: MonotonicTime,
-        output: &mut [u16],
-        max_scan: usize,
-    ) -> usize {
+    pub fn take_due(&mut self, now: MonotonicTime, output: &mut [u16], max_scan: usize) -> usize {
         if CAPACITY == 0 || output.is_empty() || self.len == 0 {
             return 0;
         }
@@ -1712,10 +1714,7 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
         written
     }
 
-    fn find_mut(
-        &mut self,
-        allocation_id: u16,
-    ) -> Result<&mut TurnReactorSlot, TurnReactorError> {
+    fn find_mut(&mut self, allocation_id: u16) -> Result<&mut TurnReactorSlot, TurnReactorError> {
         self.slots
             .iter_mut()
             .flatten()
@@ -1771,10 +1770,7 @@ mod reactor_tests {
             reactor.register(7),
             Err(TurnReactorError::DuplicateAllocation)
         );
-        assert_eq!(
-            reactor.register(8),
-            Err(TurnReactorError::CapacityReached)
-        );
+        assert_eq!(reactor.register(8), Err(TurnReactorError::CapacityReached));
     }
 
     #[test]
