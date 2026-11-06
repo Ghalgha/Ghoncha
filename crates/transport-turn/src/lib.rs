@@ -296,11 +296,11 @@ impl<
 }
 
 impl<
-        const CONTROL_CAPACITY: usize,
-        const PEER_CAPACITY: usize,
-        const MAX_DATAGRAM: usize,
-        const CONTROL_MAX_BYTES: usize,
-        const PEER_MAX_BYTES: usize,
+    const CONTROL_CAPACITY: usize,
+    const PEER_CAPACITY: usize,
+    const MAX_DATAGRAM: usize,
+    const CONTROL_MAX_BYTES: usize,
+    const PEER_MAX_BYTES: usize,
 > Default
     for TurnUdpSendQueues<
         CONTROL_CAPACITY,
