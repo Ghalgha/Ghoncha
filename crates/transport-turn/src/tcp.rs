@@ -342,3 +342,653 @@ mod tests {
         ));
     }
 }
+
+
+/// Non-blocking byte-stream operations required by the TURN TCP driver.
+///
+/// The socket must already be connected to the configured TURN server, bound
+/// to the selected underlay Network, and protected from the VPN on Android.
+pub trait TurnStreamSocket {
+    fn local_addr(&self) -> SocketAddr;
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TurnStreamIoError>;
+    fn write(&mut self, bytes: &[u8]) -> Result<usize, TurnStreamIoError>;
+}
+
+/// Portable non-blocking stream I/O error categories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnStreamIoError {
+    WouldBlock,
+    Failed,
+}
+
+/// Errors from the bounded raw TURN stream send queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnTcpQueueError {
+    EmptyFrame,
+    FrameTooLarge { maximum: usize, actual: usize },
+    QueueFull,
+    ByteLimitReached {
+        maximum: usize,
+        queued: usize,
+        incoming: usize,
+    },
+    NoPendingFrame,
+    NoProgress,
+    WriteExceedsPending { remaining: usize, attempted: usize },
+}
+
+/// One encoded TURN wire frame retained across partial TCP writes.
+struct QueuedTurnFrame<const MAX_FRAME: usize> {
+    bytes: [u8; MAX_FRAME],
+    len: usize,
+    offset: usize,
+}
+
+/// Borrowed unwritten suffix of the current TURN stream frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PendingTurnFrame<'a> {
+    pub bytes: &'a [u8],
+}
+
+/// Fixed-capacity FIFO for raw TURN stream bytes.
+///
+/// This queue deliberately adds no framing prefix. STUN messages and
+/// ChannelData already have TURN-defined framing; adding a generic record
+/// prefix here would corrupt the TURN/TCP wire protocol.
+pub struct TurnTcpSendQueue<
+    const CAPACITY: usize,
+    const MAX_FRAME: usize,
+    const MAX_QUEUED_BYTES: usize,
+> {
+    entries: [Option<QueuedTurnFrame<MAX_FRAME>>; CAPACITY],
+    head: usize,
+    len: usize,
+    queued_bytes: usize,
+}
+
+impl<const CAPACITY: usize, const MAX_FRAME: usize, const MAX_QUEUED_BYTES: usize>
+    TurnTcpSendQueue<CAPACITY, MAX_FRAME, MAX_QUEUED_BYTES>
+{
+    pub fn new() -> Self {
+        Self {
+            entries: core::array::from_fn(|_| None),
+            head: 0,
+            len: 0,
+            queued_bytes: 0,
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub const fn queued_bytes(&self) -> usize {
+        self.queued_bytes
+    }
+
+    pub fn ensure_capacity(&self, maximum_incoming: usize) -> Result<(), TurnTcpQueueError> {
+        if self.len == CAPACITY {
+            return Err(TurnTcpQueueError::QueueFull);
+        }
+        let next = self.queued_bytes.checked_add(maximum_incoming).ok_or(
+            TurnTcpQueueError::ByteLimitReached {
+                maximum: MAX_QUEUED_BYTES,
+                queued: self.queued_bytes,
+                incoming: maximum_incoming,
+            },
+        )?;
+        if next > MAX_QUEUED_BYTES {
+            return Err(TurnTcpQueueError::ByteLimitReached {
+                maximum: MAX_QUEUED_BYTES,
+                queued: self.queued_bytes,
+                incoming: maximum_incoming,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn push(&mut self, frame: &[u8]) -> Result<(), TurnTcpQueueError> {
+        if frame.is_empty() {
+            return Err(TurnTcpQueueError::EmptyFrame);
+        }
+        if frame.len() > MAX_FRAME {
+            return Err(TurnTcpQueueError::FrameTooLarge {
+                maximum: MAX_FRAME,
+                actual: frame.len(),
+            });
+        }
+        self.ensure_capacity(frame.len())?;
+
+        let tail = (self.head + self.len) % CAPACITY;
+        let mut bytes = [0; MAX_FRAME];
+        bytes[..frame.len()].copy_from_slice(frame);
+        self.entries[tail] = Some(QueuedTurnFrame {
+            bytes,
+            len: frame.len(),
+            offset: 0,
+        });
+        self.len += 1;
+        self.queued_bytes += frame.len();
+        Ok(())
+    }
+
+    pub fn front(&self) -> Option<PendingTurnFrame<'_>> {
+        let entry = self.entries.get(self.head)?.as_ref()?;
+        Some(PendingTurnFrame {
+            bytes: &entry.bytes[entry.offset..entry.len],
+        })
+    }
+
+    /// Accounts for bytes accepted by the socket. Returns true when the
+    /// current logical TURN frame has been fully written.
+    pub fn advance_written(&mut self, written: usize) -> Result<bool, TurnTcpQueueError> {
+        if self.len == 0 {
+            return Err(TurnTcpQueueError::NoPendingFrame);
+        }
+        if written == 0 {
+            return Err(TurnTcpQueueError::NoProgress);
+        }
+
+        let complete = {
+            let entry = self.entries[self.head]
+                .as_mut()
+                .expect("occupied queue head must contain a frame");
+            let remaining = entry.len - entry.offset;
+            if written > remaining {
+                return Err(TurnTcpQueueError::WriteExceedsPending {
+                    remaining,
+                    attempted: written,
+                });
+            }
+            entry.offset += written;
+            entry.offset == entry.len
+        };
+
+        self.queued_bytes -= written;
+        if complete {
+            self.entries[self.head] = None;
+            self.len -= 1;
+            self.head = if self.head + 1 == CAPACITY {
+                0
+            } else {
+                self.head + 1
+            };
+        }
+        Ok(complete)
+    }
+}
+
+impl<const CAPACITY: usize, const MAX_FRAME: usize, const MAX_QUEUED_BYTES: usize> Default
+    for TurnTcpSendQueue<CAPACITY, MAX_FRAME, MAX_QUEUED_BYTES>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Result of advancing TURN timers and queueing one control frame.
+#[derive(Debug)]
+pub struct TurnTcpControlPoll {
+    pub protocol: TurnPollRet,
+    pub queued_control: bool,
+    pub queue_blocked: bool,
+}
+
+/// Outcome of one non-blocking TCP stream write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnTcpFlushResult {
+    Empty,
+    Written { bytes: usize, frame_complete: bool },
+    WouldBlock,
+    Closed,
+    Failed,
+    InvalidWriteCount { offered: usize, reported: usize },
+}
+
+/// Outcome of one non-blocking TCP stream read.
+#[derive(Debug)]
+pub enum TurnTcpDriverReceive<'a> {
+    WouldBlock,
+    Closed,
+    Data(TurnReceiveResult<'a>),
+}
+
+/// Errors surfaced by the socket-owning TURN TCP driver.
+#[derive(Debug)]
+pub enum TurnTcpDriverError {
+    Turn(TurnTcpError),
+    Queue(TurnTcpQueueError),
+    Socket(TurnStreamIoError),
+    Retired,
+}
+
+/// Owns one connected TCP stream, one TURN client state machine, and a bounded
+/// FIFO of raw TURN wire frames.
+///
+/// Partial writes retain the exact unwritten suffix. The next frame is never
+/// interleaved with the current one. No generic length prefix is added because
+/// TURN/STUN and ChannelData have their own framing.
+pub struct TurnTcpDriver<
+    S,
+    const CAPACITY: usize = 16,
+    const MAX_FRAME: usize = 4096,
+    const MAX_QUEUED_BYTES: usize = 65_536,
+> {
+    socket: S,
+    engine: TurnTcpEngine,
+    queue: TurnTcpSendQueue<CAPACITY, MAX_FRAME, MAX_QUEUED_BYTES>,
+    retired: bool,
+}
+
+impl<
+        S: TurnStreamSocket,
+        const CAPACITY: usize,
+        const MAX_FRAME: usize,
+        const MAX_QUEUED_BYTES: usize,
+    > TurnTcpDriver<S, CAPACITY, MAX_FRAME, MAX_QUEUED_BYTES>
+{
+    /// Takes ownership of a connected stream and creates its TURN state.
+    pub fn new(
+        socket: S,
+        server_addr: SocketAddr,
+        username: &str,
+        password: &str,
+    ) -> Result<Self, TurnTcpError> {
+        let engine = TurnTcpEngine::new(socket.local_addr(), server_addr, username, password)?;
+        Ok(Self {
+            socket,
+            engine,
+            queue: TurnTcpSendQueue::new(),
+            retired: false,
+        })
+    }
+
+    fn ensure_active(&self) -> Result<(), TurnTcpDriverError> {
+        if self.retired {
+            Err(TurnTcpDriverError::Retired)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Advances TURN timers and queues at most one control frame.
+    ///
+    /// The caller schedules the next timer from the returned WaitUntil value.
+    /// A full queue leaves the pending protocol transmit untouched.
+    pub fn poll_control_with_deadline(
+        &mut self,
+        now: MonotonicTime,
+    ) -> Result<TurnTcpControlPoll, TurnTcpDriverError> {
+        self.ensure_active()?;
+        let protocol = self.engine.poll(now).map_err(TurnTcpDriverError::Turn)?;
+        if self.queue.ensure_capacity(MAX_FRAME).is_err() {
+            return Ok(TurnTcpControlPoll {
+                protocol,
+                queued_control: false,
+                queue_blocked: true,
+            });
+        }
+
+        let Some(transmit) = self
+            .engine
+            .poll_transmit(now)
+            .map_err(TurnTcpDriverError::Turn)?
+        else {
+            return Ok(TurnTcpControlPoll {
+                protocol,
+                queued_control: false,
+                queue_blocked: false,
+            });
+        };
+
+        let bytes = transmit.data.as_ref();
+        if bytes.len() > MAX_FRAME {
+            self.retire();
+            return Err(TurnTcpDriverError::Queue(
+                TurnTcpQueueError::FrameTooLarge {
+                    maximum: MAX_FRAME,
+                    actual: bytes.len(),
+                },
+            ));
+        }
+        if let Err(error) = self.queue.push(bytes) {
+            self.retire();
+            return Err(TurnTcpDriverError::Queue(error));
+        }
+
+        Ok(TurnTcpControlPoll {
+            protocol,
+            queued_control: true,
+            queue_blocked: false,
+        })
+    }
+
+    /// Encodes and queues one peer payload. The scratch buffer must be at
+    /// least MAX_FRAME bytes so the TURN build cannot be consumed then lost.
+    pub fn queue_peer_data(
+        &mut self,
+        peer: SocketAddr,
+        payload: &[u8],
+        now: MonotonicTime,
+        encoded_buffer: &mut [u8],
+    ) -> Result<usize, TurnTcpDriverError> {
+        self.ensure_active()?;
+        if encoded_buffer.len() < MAX_FRAME {
+            return Err(TurnTcpDriverError::Queue(
+                TurnTcpQueueError::FrameTooLarge {
+                    maximum: MAX_FRAME,
+                    actual: encoded_buffer.len(),
+                },
+            ));
+        }
+        self.queue
+            .ensure_capacity(MAX_FRAME)
+            .map_err(TurnTcpDriverError::Queue)?;
+
+        let outbound = match self.engine.send_to_into(
+            peer,
+            payload,
+            now,
+            &mut encoded_buffer[..MAX_FRAME],
+        ) {
+            Ok(outbound) => outbound,
+            Err(error @ TurnTcpError::BufferTooSmall { .. }) => {
+                self.retire();
+                return Err(TurnTcpDriverError::Turn(error));
+            }
+            Err(error) => return Err(TurnTcpDriverError::Turn(error)),
+        };
+
+        if let Err(error) = self.queue.push(&encoded_buffer[..outbound.len]) {
+            self.retire();
+            return Err(TurnTcpDriverError::Queue(error));
+        }
+        Ok(outbound.len)
+    }
+
+    /// Attempts one non-blocking write. WouldBlock preserves the queue.
+    pub fn flush_one(&mut self) -> Result<TurnTcpFlushResult, TurnTcpDriverError> {
+        self.ensure_active()?;
+        let Some(pending) = self.queue.front() else {
+            return Ok(TurnTcpFlushResult::Empty);
+        };
+        let offered = pending.bytes.len();
+
+        match self.socket.write(pending.bytes) {
+            Ok(0) => {
+                self.retire();
+                Ok(TurnTcpFlushResult::Closed)
+            }
+            Ok(reported) if reported > offered => {
+                self.retire();
+                Ok(TurnTcpFlushResult::InvalidWriteCount { offered, reported })
+            }
+            Ok(reported) => {
+                let frame_complete = self
+                    .queue
+                    .advance_written(reported)
+                    .map_err(TurnTcpDriverError::Queue)?;
+                Ok(TurnTcpFlushResult::Written {
+                    bytes: reported,
+                    frame_complete,
+                })
+            }
+            Err(TurnStreamIoError::WouldBlock) => Ok(TurnTcpFlushResult::WouldBlock),
+            Err(TurnStreamIoError::Failed) => {
+                self.retire();
+                Ok(TurnTcpFlushResult::Failed)
+            }
+        }
+    }
+
+    /// Reads one bounded chunk from the stream and feeds the TURN parser.
+    /// A zero-byte read is EOF and permanently retires this driver.
+    pub fn receive_one<'a>(
+        &mut self,
+        buffer: &'a mut [u8],
+        now: MonotonicTime,
+    ) -> Result<TurnTcpDriverReceive<'a>, TurnTcpDriverError> {
+        self.ensure_active()?;
+        if buffer.is_empty() {
+            return Ok(TurnTcpDriverReceive::WouldBlock);
+        }
+
+        match self.socket.read(buffer) {
+            Ok(0) => {
+                self.retire();
+                Ok(TurnTcpDriverReceive::Closed)
+            }
+            Ok(read) if read > buffer.len() => {
+                self.retire();
+                Err(TurnTcpDriverError::Socket(TurnStreamIoError::Failed))
+            }
+            Ok(read) => self
+                .engine
+                .receive_stream_bytes(&buffer[..read], now)
+                .map(TurnTcpDriverReceive::Data)
+                .map_err(TurnTcpDriverError::Turn),
+            Err(TurnStreamIoError::WouldBlock) => Ok(TurnTcpDriverReceive::WouldBlock),
+            Err(TurnStreamIoError::Failed) => {
+                self.retire();
+                Ok(TurnTcpDriverReceive::Closed)
+            }
+        }
+    }
+
+    /// Drains one additional peer payload already buffered by the TURN parser.
+    pub fn poll_peer_data(
+        &mut self,
+        now: MonotonicTime,
+    ) -> Result<
+        Option<turn_client_proto::api::TurnPeerData<alloc::vec::Vec<u8>>>,
+        TurnTcpDriverError,
+    > {
+        self.ensure_active()?;
+        self.engine
+            .poll_peer_data(now)
+            .map_err(TurnTcpDriverError::Turn)
+    }
+
+    pub fn poll_event(&mut self) -> Option<TurnEvent> {
+        self.engine.poll_event()
+    }
+
+    pub fn socket(&self) -> &S {
+        &self.socket
+    }
+
+    pub const fn queued_frames(&self) -> usize {
+        self.queue.len()
+    }
+
+    pub const fn queued_bytes(&self) -> usize {
+        self.queue.queued_bytes()
+    }
+
+    fn retire(&mut self) {
+        if !self.retired {
+            self.retired = true;
+            self.engine.protocol_error();
+        }
+    }
+
+    /// Returns all owned state without discarding queued bytes.
+    pub fn into_parts(
+        self,
+    ) -> (
+        S,
+        TurnTcpEngine,
+        TurnTcpSendQueue<CAPACITY, MAX_FRAME, MAX_QUEUED_BYTES>,
+    ) {
+        (self.socket, self.engine, self.queue)
+    }
+
+    /// Explicitly abandons queued bytes during teardown.
+    pub fn into_parts_discarding_pending(self) -> (S, TurnTcpEngine) {
+        (self.socket, self.engine)
+    }
+}
+
+#[cfg(feature = "std")]
+impl TurnStreamSocket for std::net::TcpStream {
+    fn local_addr(&self) -> SocketAddr {
+        std::net::TcpStream::local_addr(self)
+            .expect("connected TCP stream must expose its local address")
+    }
+
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
+        use std::io::Read;
+        std::io::Read::read(self, buffer).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                TurnStreamIoError::WouldBlock
+            } else {
+                TurnStreamIoError::Failed
+            }
+        })
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<usize, TurnStreamIoError> {
+        use std::io::Write;
+        std::io::Write::write(self, bytes).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                TurnStreamIoError::WouldBlock
+            } else {
+                TurnStreamIoError::Failed
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod driver_tests {
+    use super::*;
+    use alloc::vec::Vec;
+
+    #[derive(Debug)]
+    struct MockStream {
+        local: SocketAddr,
+        writes: Vec<u8>,
+        write_limit: usize,
+        would_block: bool,
+    }
+
+    impl TurnStreamSocket for MockStream {
+        fn local_addr(&self) -> SocketAddr {
+            self.local
+        }
+
+        fn read(&mut self, _buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
+            Err(TurnStreamIoError::WouldBlock)
+        }
+
+        fn write(&mut self, bytes: &[u8]) -> Result<usize, TurnStreamIoError> {
+            if self.would_block {
+                return Err(TurnStreamIoError::WouldBlock);
+            }
+            let written = bytes.len().min(self.write_limit);
+            self.writes.extend_from_slice(&bytes[..written]);
+            Ok(written)
+        }
+    }
+
+    fn mock_stream() -> MockStream {
+        MockStream {
+            local: "192.0.2.10:40000".parse().unwrap(),
+            writes: Vec::new(),
+            write_limit: 2,
+            would_block: false,
+        }
+    }
+
+    #[test]
+    fn raw_turn_queue_preserves_frame_boundaries_across_partial_writes() {
+        let mut queue = TurnTcpSendQueue::<2, 16, 32>::new();
+        queue.push(&[1, 2, 3, 4, 5]).unwrap();
+        queue.push(&[6, 7, 8]).unwrap();
+
+        assert_eq!(queue.front().unwrap().bytes, &[1, 2, 3, 4, 5]);
+        assert!(!queue.advance_written(2).unwrap());
+        assert_eq!(queue.front().unwrap().bytes, &[3, 4, 5]);
+        assert!(queue.advance_written(3).unwrap());
+        assert_eq!(queue.front().unwrap().bytes, &[6, 7, 8]);
+        assert!(queue.advance_written(3).unwrap());
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn raw_turn_queue_enforces_record_and_byte_budgets() {
+        let mut queue = TurnTcpSendQueue::<2, 8, 8>::new();
+        assert_eq!(queue.push(&[]), Err(TurnTcpQueueError::EmptyFrame));
+        assert_eq!(
+            queue.push(&[0; 9]),
+            Err(TurnTcpQueueError::FrameTooLarge {
+                maximum: 8,
+                actual: 9
+            })
+        );
+        queue.push(&[1, 2, 3, 4, 5]).unwrap();
+        assert_eq!(
+            queue.push(&[6, 7, 8, 9]),
+            Err(TurnTcpQueueError::ByteLimitReached {
+                maximum: 8,
+                queued: 5,
+                incoming: 4
+            })
+        );
+    }
+
+    #[test]
+    fn driver_retains_unwritten_suffix_after_would_block_and_partial_write() {
+        let mut driver = TurnTcpDriver::<MockStream, 2, 16, 32>::new(
+            mock_stream(),
+            "198.51.100.1:3478".parse().unwrap(),
+            "test-user",
+            "test-password",
+        )
+        .unwrap();
+        driver.queue.push(&[1, 2, 3, 4, 5]).unwrap();
+        driver.socket.would_block = true;
+
+        assert_eq!(driver.flush_one().unwrap(), TurnTcpFlushResult::WouldBlock);
+        assert_eq!(driver.queued_bytes(), 5);
+        driver.socket.would_block = false;
+
+        assert_eq!(
+            driver.flush_one().unwrap(),
+            TurnTcpFlushResult::Written {
+                bytes: 2,
+                frame_complete: false
+            }
+        );
+        assert_eq!(driver.queued_bytes(), 3);
+        assert_eq!(driver.socket.writes, &[1, 2]);
+
+        assert_eq!(
+            driver.flush_one().unwrap(),
+            TurnTcpFlushResult::Written {
+                bytes: 2,
+                frame_complete: false
+            }
+        );
+        assert_eq!(
+            driver.flush_one().unwrap(),
+            TurnTcpFlushResult::Written {
+                bytes: 1,
+                frame_complete: true
+            }
+        );
+        assert_eq!(driver.socket.writes, &[1, 2, 3, 4, 5]);
+        assert_eq!(driver.queued_frames(), 0);
+    }
+
+    #[test]
+    fn zero_capacity_queue_fails_without_modulo_or_panic() {
+        let mut queue = TurnTcpSendQueue::<0, 8, 8>::new();
+        assert_eq!(queue.push(&[1]), Err(TurnTcpQueueError::QueueFull));
+        assert!(queue.front().is_none());
+    }
+}
