@@ -1702,12 +1702,12 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
             let index = self.cursor;
             self.cursor = (self.cursor + 1) % CAPACITY;
             scanned += 1;
-            if let Some(slot) = self.slots[index].as_mut() {
-                if slot.deadline.is_some_and(|deadline| deadline <= now) {
-                    output[written] = slot.allocation_id;
-                    written += 1;
-                    slot.deadline = None;
-                }
+            if let Some(slot) = self.slots[index].as_mut()
+                && slot.deadline.is_some_and(|deadline| deadline <= now)
+            {
+                output[written] = slot.allocation_id;
+                written += 1;
+                slot.deadline = None;
             }
         }
         written
