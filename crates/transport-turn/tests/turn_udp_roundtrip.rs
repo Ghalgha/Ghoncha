@@ -283,6 +283,7 @@ struct MockDatagramSocket {
     inbound: VecDeque<(SocketAddr, Vec<u8>)>,
     block_next_send: bool,
     fail_next_send: bool,
+    fail_next_receive: bool,
     truncate_next_receive: bool,
 }
 
@@ -309,6 +310,10 @@ impl TurnDatagramSocket for MockDatagramSocket {
     }
 
     fn recv_from(&mut self, buffer: &mut [u8]) -> Result<DatagramReceive, DatagramSocketError> {
+        if self.fail_next_receive {
+            self.fail_next_receive = false;
+            return Err(DatagramSocketError::Failed);
+        }
         let Some((from, datagram)) = self.inbound.pop_front() else {
             return Err(DatagramSocketError::WouldBlock);
         };
@@ -342,6 +347,7 @@ fn socket_owning_driver_retains_control_datagram_across_would_block() {
         inbound: VecDeque::new(),
         block_next_send: true,
         fail_next_send: false,
+        fail_next_receive: false,
         truncate_next_receive: false,
     };
 
@@ -392,6 +398,7 @@ fn socket_driver_parts_preserve_pending_control_datagram() {
         inbound: VecDeque::new(),
         block_next_send: false,
         fail_next_send: false,
+        fail_next_receive: false,
         truncate_next_receive: false,
     };
 
@@ -419,6 +426,7 @@ fn socket_driver_retires_after_fatal_send_error() {
         inbound: VecDeque::new(),
         block_next_send: false,
         fail_next_send: true,
+        fail_next_receive: false,
         truncate_next_receive: false,
     };
 
@@ -468,6 +476,7 @@ fn socket_driver_discards_truncated_datagram_without_retiring_allocation() {
         inbound: VecDeque::from([(server_addr, vec![0u8; 64])]),
         block_next_send: false,
         fail_next_send: false,
+        fail_next_receive: false,
         truncate_next_receive: true,
     };
 
@@ -486,4 +495,43 @@ fn socket_driver_discards_truncated_datagram_without_retiring_allocation() {
             if from == server_addr
     ));
     assert!(driver.poll_control(MonotonicTime(1)).is_ok());
+}
+
+#[test]
+fn socket_driver_retires_after_fatal_receive_error() {
+    let client_addr: SocketAddr = "192.0.2.14:40004".parse().unwrap();
+    let server_addr: SocketAddr = "198.51.100.14:3478".parse().unwrap();
+    let socket = MockDatagramSocket {
+        local: client_addr,
+        sent: Vec::new(),
+        inbound: VecDeque::new(),
+        block_next_send: false,
+        fail_next_send: false,
+        fail_next_receive: true,
+        truncate_next_receive: false,
+    };
+
+    let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
+        socket,
+        server_addr,
+        "ghoncha-test-user",
+        "ghoncha-test-pass",
+    )
+    .unwrap();
+
+    let mut receive_buffer = [0u8; 128];
+    assert!(matches!(
+        driver.receive_one(&mut receive_buffer, MonotonicTime(0)),
+        Err(ghoncha_transport_turn::TurnUdpDriverError::Socket(
+            DatagramSocketError::Failed
+        ))
+    ));
+    assert!(matches!(
+        driver.poll_control(MonotonicTime(1)),
+        Err(ghoncha_transport_turn::TurnUdpDriverError::Retired)
+    ));
+    assert!(matches!(
+        driver.flush_one(),
+        Err(ghoncha_transport_turn::TurnUdpDriverError::Retired)
+    ));
 }
