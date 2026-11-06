@@ -542,14 +542,48 @@ mod tests {
         let mut manager = TurnAllocationManager::<3>::new();
         manager.insert(1, engine(40001)).unwrap();
         manager.insert(2, engine(40002)).unwrap();
-        manager.update_load(1, AllocationLoad { pressure_ppm: 700_000, ..AllocationLoad::IDLE }).unwrap();
-        manager.update_load(2, AllocationLoad { pressure_ppm: 300_000, ..AllocationLoad::IDLE }).unwrap();
+        manager
+            .update_load(
+                1,
+                AllocationLoad {
+                    pressure_ppm: 700_000,
+                    ..AllocationLoad::IDLE
+                },
+            )
+            .unwrap();
+        manager
+            .update_load(
+                2,
+                AllocationLoad {
+                    pressure_ppm: 300_000,
+                    ..AllocationLoad::IDLE
+                },
+            )
+            .unwrap();
         let routed = manager.dispatch_flow(flow_key(), 1, 3).unwrap();
-        let FlowAdmissionDecision::Dispatched(routed) = routed else { panic!("least-loaded allocation should be selected") };
+        let FlowAdmissionDecision::Dispatched(routed) = routed else {
+            panic!("least-loaded allocation should be selected")
+        };
         assert_eq!(routed.worker_id, 2);
 
-        manager.update_load(1, AllocationLoad { pressure_ppm: 800_000, ..AllocationLoad::IDLE }).unwrap();
-        manager.update_load(2, AllocationLoad { pressure_ppm: 800_000, ..AllocationLoad::IDLE }).unwrap();
+        manager
+            .update_load(
+                1,
+                AllocationLoad {
+                    pressure_ppm: 800_000,
+                    ..AllocationLoad::IDLE
+                },
+            )
+            .unwrap();
+        manager
+            .update_load(
+                2,
+                AllocationLoad {
+                    pressure_ppm: 800_000,
+                    ..AllocationLoad::IDLE
+                },
+            )
+            .unwrap();
         let next = FlowKey { discriminator: FlowDiscriminator::Ports { source: 40001, destination: 443 }, ..flow_key() };
         assert_eq!(manager.dispatch_flow(next, 2, 3).unwrap(), FlowAdmissionDecision::OpenAllocation);
         assert_eq!(manager.dispatch_flow(next, 2, 2).unwrap(), FlowAdmissionDecision::Backpressure);
