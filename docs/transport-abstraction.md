@@ -181,15 +181,17 @@ Do not add all crates at once. Add and test one crate at a time. Do not pin TURN
 ### TURN
 
 `turn-client-proto 0.7.3` from `ystreet/turn-proto` is the leading candidate for an interoperability spike:
-- Sans-I/O design separates protocol state from sockets and runtime.
-- Version 0.7.3 documentation lists RFC 8656, IPv6, UDP and TCP client support.
+- The published 0.7.3 workspace declares Rust 1.80.0 MSRV and the crate manifest declares MIT OR Apache-2.0. The library is `no_std`/Sans-I/O and implements RFC 8656 with IPv4/IPv6 and UDP/TCP client state.
+- `TurnClientUdp::allocate(local_addr, remote_addr, config)` creates protocol state only; the application owns the socket. This fits Android's requirement to bind the socket to the selected `Network` and call `VpnService.protect()` before sending.
 - For the VK proxy topology, start with the UDP TURN client: TURN/UDP is the outer hop to the VK relay. The client-to-gateway DTLS-SRTP association is carried through TURN; this is not DTLS between the client and the VK TURN server.
-- The crate also documents separate TLS-over-TCP and DTLS-over-UDP client extension crates. Those secure the client-to-TURN-server hop and are not interchangeable with the end-to-end DTLS carrier used by the reference projects.
-- It uses `turn-types` / `stun-proto` and has a documented API.
-- The public API exposes a generic `recv(Transmit<T>) -> TurnRecvRet<T>` path that can retain caller-owned buffer storage. Its convenience `poll_recv()` path returns `Vec<u8>`; do not use that convenience path in the hot packet loop without proving its allocation cost. Prototype the generic receive path with reusable packet-pool buffers and measure allocations per packet.
-- `TransmitBuild::write_into()` and `DelayedMessageOrChannelSend::write_into()` can serialize into caller-provided output buffers; prefer these over their `build()` methods, which allocate a new `Vec<u8>`. The API also requires `Debug` on some packet-data types, so never enable payload-bearing debug logs or format transport objects containing user traffic.
-- Its crate manifest declares MIT OR Apache-2.0. The upstream workspace manifest currently declares Rust 1.80 as its MSRV; verify the exact published 0.7.3 source package before pinning.
-- It is not yet selected for production. Verify its exact RFC 8656 coverage, VK server interoperability, credential/nonce behavior, Android cross-compilation, dependency graph, allocation behavior and license.
+- The crate also documents separate TLS-over-TCP and DTLS-over-UDP client extension crates. Those secure the client-to-TURN-server hop and are not interchangeable with the end-to-end DTLS-SRTP association used by the reference projects.
+- The generic `recv(Transmit<T>) -> TurnRecvRet<T>` path can retain caller-owned receive-buffer storage and returns peer data as a borrowed range where possible. Avoid the convenience `poll_recv()` path in the hot loop because it returns `Vec<u8>`.
+- `send_to()` returns a `TransmitBuild`; `write_into()` serializes ChannelData or Send Indications into caller-owned output storage. Prefer it over `build()`, which allocates a new `Vec<u8>`. `poll_transmit()` provides control messages for the socket driver.
+- `TurnClientApi` is not dyn-compatible because it has return-position `impl Iterator` methods. Use static dispatch with `TurnClientUdp` or the crate's `impl_client!` macro-generated enum; do not force it behind `dyn TurnClientApi`.
+- `TurnConfig::new()` defaults to IPv4 only and SHA-1 integrity. GHONCHA must explicitly configure IPv6 and a deliberate integrity preference (SHA-256 first where supported, SHA-1 fallback only when required by the server); do not mistake the defaults for complete IPv4/IPv6 coverage.
+- The UDP constructor panics if the configured allocation transport is not UDP. Validate the URI/transport before construction and keep this invariant inside the VK adapter.
+- Some packet-data types require `Debug`; never enable payload-bearing debug logs or format transport objects containing user traffic.
+- It is not yet selected for production. Verify the exact 0.7.3 published package, nonce/authentication behavior with VK relay credentials, IPv4/IPv6 allocations, Android cross-compilation, dependency graph, allocation behavior and license.
 
 The CSQTT TURN engine remains an important comparison implementation. Compare wire behavior and tests rather than assuming a newer crate is automatically more correct.
 
