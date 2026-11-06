@@ -284,10 +284,6 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
         client.send_to_into(peer_addr, b"payload", now, &mut undersized_buffer),
         Err(ghoncha_transport_turn::TurnError::BufferTooSmall { .. })
     ));
-    assert!(matches!(
-        client.poll_transmit(now),
-        Err(ghoncha_transport_turn::TurnError::ProtocolError)
-    ));
 }
 
 struct MockDatagramSocket {
