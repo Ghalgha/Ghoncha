@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod allocation_policy;
+
 //! Bounded, allocation-free inner-flow affinity dispatcher.
 //!
 //! The first implementation deliberately provides stable affinity only. It
