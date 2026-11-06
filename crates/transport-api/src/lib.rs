@@ -246,4 +246,157 @@ mod tests {
         assert_eq!(framing, RecordFraming::LengthPrefixedStream);
         assert_eq!(delivery, DeliverySemantics::ReliableOrdered);
     }
+
+    struct MockTransport {
+        state: TransportState,
+        max_record_size: usize,
+        pending: [u8; 1200],
+        pending_len: Option<usize>,
+    }
+
+    impl MockTransport {
+        fn new() -> Self {
+            Self {
+                state: TransportState::Idle,
+                max_record_size: 1200,
+                pending: [0; 1200],
+                pending_len: None,
+            }
+        }
+    }
+
+    impl RecordTransport for MockTransport {
+        fn id(&self) -> TransportId {
+            TransportId("test")
+        }
+
+        fn capabilities(&self) -> TransportCapabilities {
+            TransportCapabilities {
+                framing: RecordFraming::Datagram,
+                delivery: DeliverySemantics::BestEffort,
+                max_record_size: self.max_record_size as u32,
+                address_families: AddressFamilies::IPV4_AND_IPV6,
+                network_protocol: NetworkProtocol::Udp,
+                supports_network_migration: false,
+                requires_keepalive: false,
+                requires_external_credentials: false,
+            }
+        }
+
+        fn state(&self) -> TransportState {
+            self.state
+        }
+
+        fn start(&mut self, config: TransportConfig) -> Result<(), TransportError> {
+            if self.state != TransportState::Idle {
+                return Err(TransportError::AlreadyStarted);
+            }
+            if config.max_record_size == 0
+                || config.max_record_size as usize > self.max_record_size
+            {
+                return Err(TransportError::InvalidConfiguration);
+            }
+            self.max_record_size = config.max_record_size as usize;
+            self.state = TransportState::Ready;
+            Ok(())
+        }
+
+        fn poll(
+            &mut self,
+            _now: MonotonicTime,
+            _budget: IoBudget,
+        ) -> Result<PollOutcome, TransportError> {
+            Ok(PollOutcome {
+                work_done: 0,
+                state: self.state,
+                next_deadline: None,
+            })
+        }
+
+        fn send_record(&mut self, record: &[u8]) -> Result<SendOutcome, TransportError> {
+            if self.state != TransportState::Ready {
+                return Err(TransportError::NotStarted);
+            }
+            if record.len() > self.max_record_size {
+                return Err(TransportError::RecordTooLarge);
+            }
+            if self.pending_len.is_some() {
+                return Ok(SendOutcome::Backpressure);
+            }
+            self.pending[..record.len()].copy_from_slice(record);
+            self.pending_len = Some(record.len());
+            Ok(SendOutcome::Accepted)
+        }
+
+        fn receive_record(&mut self, output: &mut [u8]) -> Result<ReceiveOutcome, TransportError> {
+            let Some(len) = self.pending_len else {
+                return Ok(ReceiveOutcome::WouldBlock);
+            };
+            if output.len() < len {
+                return Ok(ReceiveOutcome::BufferTooSmall { required: len });
+            }
+            output[..len].copy_from_slice(&self.pending[..len]);
+            self.pending_len = None;
+            Ok(ReceiveOutcome::Record { len })
+        }
+
+        fn close(&mut self, _reason: CloseReason) {
+            self.pending_len = None;
+            self.state = TransportState::Closed;
+        }
+    }
+
+    #[test]
+    fn bounded_transport_preserves_records_and_reports_backpressure() {
+        let mut transport = MockTransport::new();
+        transport
+            .start(TransportConfig {
+                network_generation: 7,
+                max_record_size: 1200,
+            })
+            .unwrap();
+
+        assert_eq!(transport.send_record(b"test").unwrap(), SendOutcome::Accepted);
+        assert_eq!(
+            transport.send_record(b"next").unwrap(),
+            SendOutcome::Backpressure
+        );
+
+        let mut short = [0u8; 2];
+        assert_eq!(
+            transport.receive_record(&mut short).unwrap(),
+            ReceiveOutcome::BufferTooSmall { required: 4 }
+        );
+
+        let mut output = [0u8; 4];
+        assert_eq!(
+            transport.receive_record(&mut output).unwrap(),
+            ReceiveOutcome::Record { len: 4 }
+        );
+        assert_eq!(&output, b"test");
+        assert_eq!(
+            transport.receive_record(&mut output).unwrap(),
+            ReceiveOutcome::WouldBlock
+        );
+
+        transport.close(CloseReason::UserRequest);
+        transport.close(CloseReason::Shutdown);
+        assert_eq!(transport.state(), TransportState::Closed);
+    }
+
+    #[test]
+    fn bounded_transport_rejects_oversized_records() {
+        let mut transport = MockTransport::new();
+        transport
+            .start(TransportConfig {
+                network_generation: 1,
+                max_record_size: 8,
+            })
+            .unwrap();
+
+        assert_eq!(
+            transport.send_record(b"123456789"),
+            Err(TransportError::RecordTooLarge)
+        );
+    }
 }
