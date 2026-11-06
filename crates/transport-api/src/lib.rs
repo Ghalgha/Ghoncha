@@ -15,6 +15,9 @@ pub use identity::*;
 mod keepalive;
 pub use keepalive::*;
 
+mod profiles;
+pub use profiles::*;
+
 mod rtp;
 pub use rtp::*;
 
