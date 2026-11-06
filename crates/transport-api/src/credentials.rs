@@ -98,8 +98,7 @@ pub trait TurnCredentialProvider {
     fn state(&self) -> CredentialProviderState;
 
     /// Begins credential acquisition for the supplied network generation.
-    fn begin(&mut self, network_generation: u64)
-        -> Result<(), CredentialProviderError>;
+    fn begin(&mut self, network_generation: u64) -> Result<(), CredentialProviderError>;
 
     /// Advances credential acquisition or refresh within the supplied budget.
     fn poll(
