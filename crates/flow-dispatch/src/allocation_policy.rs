@@ -177,7 +177,7 @@ mod tests {
         let loads = [AllocationLoad {
             id: 1,
             healthy: true,
-            pressure_ppm: 900_000,
+            pressure_ppm: 1_000_000,
         }];
         let config = AllocationPolicyConfig {
             saturation_threshold_ppm: u32::MAX,
