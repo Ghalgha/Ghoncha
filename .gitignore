@@ -1,0 +1,26 @@
+# Rust build output
+/target/
+**/target/
+
+# Android / Gradle build output
+.gradle/
+**/build/
+local.properties
+
+# IDE and editor state
+.idea/
+.vscode/
+*.iml
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+key.properties
+secrets.properties
+
+# OS noise
+.DS_Store
+Thumbs.db
