@@ -7,6 +7,9 @@
 //! Packet buffers are supplied by the caller; no socket or async runtime is
 //! created here.
 
+mod manager;
+pub use manager::*;
+
 use core::convert::TryFrom;
 use core::net::{IpAddr, SocketAddr};
 
