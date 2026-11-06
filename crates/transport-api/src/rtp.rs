@@ -166,6 +166,13 @@ mod tests {
             RtpRecord::parse(&datagram),
             Err(RtpRecordError::ContributingSourcesNotSupported)
         );
+
+        datagram[0] = 0x80;
+        datagram[1] = 0x80 | GHONCHA_RTP_PAYLOAD_TYPE;
+        assert_eq!(
+            RtpRecord::parse(&datagram),
+            Err(RtpRecordError::MarkerNotSupported)
+        );
     }
 
     #[test]
@@ -186,7 +193,10 @@ mod tests {
         );
 
         datagram[1] = GHONCHA_RTP_PAYLOAD_TYPE;
-        assert_eq!(RtpRecord::parse(&datagram[..RTP_HEADER_LEN]), Err(RtpRecordError::EmptyPayload));
+        assert_eq!(
+            RtpRecord::parse(&datagram[..RTP_HEADER_LEN]),
+            Err(RtpRecordError::EmptyPayload)
+        );
     }
 
     #[test]
