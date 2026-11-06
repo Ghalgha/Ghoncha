@@ -124,6 +124,8 @@ version = "0.1.0"
 name = "ghoncha-transport-turn"
 version = "0.1.0"
 dependencies = [
+ "ghoncha-flow-dispatch",
+ "ghoncha-packet",
  "ghoncha-transport-api",
  "turn-client-proto",
  "turn-server-proto",
