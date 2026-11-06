@@ -133,10 +133,14 @@ pub enum SendOutcome {
 /// Result of receiving one complete record into caller-owned memory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReceiveOutcome {
-    Record { len: usize },
+    Record {
+        len: usize,
+    },
     WouldBlock,
     /// The next record remains queued; retry with a buffer of at least this size.
-    BufferTooSmall { required: usize },
+    BufferTooSmall {
+        required: usize,
+    },
 }
 
 /// Reasons for an explicit, idempotent adapter shutdown.
@@ -184,11 +188,8 @@ pub trait RecordTransport {
     fn start(&mut self, config: TransportConfig) -> Result<(), TransportError>;
 
     /// Advances protocol timers and I/O readiness by at most budget.
-    fn poll(
-        &mut self,
-        now: MonotonicTime,
-        budget: IoBudget,
-    ) -> Result<PollOutcome, TransportError>;
+    fn poll(&mut self, now: MonotonicTime, budget: IoBudget)
+        -> Result<PollOutcome, TransportError>;
 
     /// Enqueues one complete record or reports backpressure.
     fn send_record(&mut self, record: &[u8]) -> Result<SendOutcome, TransportError>;
