@@ -214,6 +214,17 @@ The CSQTT TURN engine remains an important comparison implementation. Compare wi
 
 Do not assume that an RTP header with an Opus or VP8 payload type is a valid Opus/VP8 media packet when its payload actually contains opaque VPN data. Define a private, explicitly configured RTP payload format for GHONCHA. Any media-shaped camouflage experiment must be isolated, accurately described, and tested separately from protocol conformance.
 
+### SRTP implementation trade-offs
+
+Two implementations remain under evaluation; neither is approved for production.
+
+- `rtc-srtp 0.21.1` is a maintained Sans-I/O Rust implementation. It supports AEAD-AES-128-GCM and provider selection through `rtc-crypto` (Ring or AWS-LC-RS). It maintains replay/rollover state and uses separate one-way contexts for send and receive. Source inspection shows `encrypt_rtp_with_header` currently creates and returns a new `BytesMut` per packet; this is a measurable allocation risk for GHONCHA's hot path. Keep it as the portable Rust baseline and benchmark it on Android.
+- `srtp 0.7.0` wraps the mature C `libsrtp2` library and supports in-place packet protection through `VecLike`, including a caller-owned `Cursor<&mut [u8]>`. This may better satisfy the no-allocation packet-path goal. Its default policy is AES-CM-128/HMAC-SHA1-80. AES-GCM policy constructors are compiled only when the OpenSSL feature is enabled; the build then includes native libsrtp2, bindgen, a C toolchain, and potentially OpenSSL. `srtp2-sys 3.0.2` is BSD-3-Clause; the safe wrapper is MIT OR Apache-2.0. Android NDK cross-compilation and binary size are unresolved.
+- The C implementation is not automatically faster or more energy-efficient on Android. Compare both implementations with identical RTP/SRTP vectors, profile, MTU, and traffic patterns. Measure allocations per packet, throughput, p50/p95 latency, CPU time, thermal behavior, and battery draw.
+- The initial security target is AEAD-AES-128-GCM (SRTP profile 0x0007). If the native libsrtp2 build cannot enable GCM cleanly for Android, compare the pure-Rust AEAD implementation against the native AES-CM/HMAC-SHA1-80 path; do not downgrade silently. Any profile change must be explicit and authenticated.
+
+The chosen library must expose reliable replay protection, rollover-counter handling, key-lifetime limits, explicit failure semantics, and a way to reuse packet buffers. If no candidate meets the requirements, evaluate a narrowly scoped upstream contribution or another maintained implementation rather than writing a custom SRTP cryptographic engine.
+
 ### Standards
 
 TURN behavior follows RFC 8656 and STUN behavior follows RFC 8489. DTLS-SRTP follows RFC 5764; SRTP AES-GCM follows RFC 7714. TURN-over-TCP/TLS framing, UDP retransmission, allocation lifetime, permissions, ChannelBind, nonce challenges, IPv6 and MTU handling require dedicated conformance tests.
@@ -224,7 +235,7 @@ Before the first production adapter:
 1. Define the exact record-layer choice and authenticated peer identity.
 2. Build a client/server interoperability harness independent of Android and VK.
 3. Compare `turn-client-proto` with the reference TURN engine on identical test vectors and TURN servers.
-4. Verify `dimpl` DTLS-SRTP negotiation and `rtc-srtp` packet protection against an independent SRTP implementation; no insecure certificate bypass.
+4. Verify `dimpl` DTLS-SRTP negotiation and both candidate SRTP protectors against an independent implementation; no insecure certificate bypass.
 5. Cross-compile the selected dependencies for Android ABIs using the current supported NDK.
 6. Fuzz STUN/TURN parsing, DTLS-SRTP handshake, RTP/SRTP framing, and transport record boundaries.
 7. Verify licensing and transitive dependencies.
