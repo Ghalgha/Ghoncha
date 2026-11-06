@@ -210,6 +210,40 @@ pub enum DatagramClass {
     PeerData,
 }
 
+/// Result reported by a caller-owned UDP socket send operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatagramSendAttempt {
+    /// The socket reports the number of bytes accepted as one UDP datagram.
+    Sent(usize),
+    /// The socket is not currently writable; retain the datagram unchanged.
+    WouldBlock,
+    /// A fatal or otherwise unrecoverable send error occurred.
+    Failed,
+}
+
+/// Outcome of attempting to send the next queued datagram.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatagramFlushResult {
+    Empty,
+    Sent {
+        class: DatagramClass,
+        bytes: usize,
+    },
+    WouldBlock {
+        class: DatagramClass,
+    },
+    Failed {
+        class: DatagramClass,
+    },
+    /// UDP sends are atomic. A partial result is an I/O contract violation;
+    /// the queue retains the record and the caller must retire the socket.
+    PartialDatagram {
+        class: DatagramClass,
+        expected: usize,
+        actual: usize,
+    },
+}
+
 /// Independent bounded queues for TURN control and peer payload datagrams.
 ///
 /// Control traffic is selected first so sustained user-data traffic cannot
@@ -289,6 +323,40 @@ impl<
         }
         self.peer_data
             .push(outbound.destination, &encoded_buffer[..outbound.len])
+    }
+
+    /// Attempts one datagram send using the caller-owned socket.
+    ///
+    /// The closure must perform exactly one atomic UDP send. The queue removes
+    /// the record only when the closure reports the full datagram length.
+    /// WouldBlock and Failed preserve the record; the caller owns retry,
+    /// socket retirement, and error reporting policy.
+    pub fn flush_one<F>(&mut self, send: F) -> DatagramFlushResult
+    where
+        F: FnOnce(SocketAddr, &[u8]) -> DatagramSendAttempt,
+    {
+        let Some((class, pending)) = self.next() else {
+            return DatagramFlushResult::Empty;
+        };
+        let destination = pending.destination;
+        let expected = pending.bytes.len();
+
+        match send(destination, pending.bytes) {
+            DatagramSendAttempt::Sent(actual) if actual == expected => {
+                let _ = self.pop_sent(class);
+                DatagramFlushResult::Sent {
+                    class,
+                    bytes: actual,
+                }
+            }
+            DatagramSendAttempt::Sent(actual) => DatagramFlushResult::PartialDatagram {
+                class,
+                expected,
+                actual,
+            },
+            DatagramSendAttempt::WouldBlock => DatagramFlushResult::WouldBlock { class },
+            DatagramSendAttempt::Failed => DatagramFlushResult::Failed { class },
+        }
     }
 
     /// Selects control traffic first, preserving FIFO order within each class.
@@ -729,6 +797,59 @@ mod tests {
             })
         );
         assert_eq!(queues.peer_data_len(), 0);
+    }
+
+    #[test]
+    fn flush_one_removes_only_a_fully_sent_datagram() {
+        let mut queues = TurnUdpSendQueues::<1, 1, 8, 8, 8>::new();
+        queues.push_control(destination(), &[1, 2, 3]).unwrap();
+
+        assert_eq!(
+            queues.flush_one(|to, bytes| {
+                assert_eq!(to, destination());
+                assert_eq!(bytes, &[1, 2, 3]);
+                DatagramSendAttempt::WouldBlock
+            }),
+            DatagramFlushResult::WouldBlock {
+                class: DatagramClass::Control
+            }
+        );
+        assert_eq!(queues.control_len(), 1);
+
+        assert_eq!(
+            queues.flush_one(|_, _| DatagramSendAttempt::Failed),
+            DatagramFlushResult::Failed {
+                class: DatagramClass::Control
+            }
+        );
+        assert_eq!(queues.control_len(), 1);
+
+        assert_eq!(
+            queues.flush_one(|_, bytes| DatagramSendAttempt::Sent(bytes.len())),
+            DatagramFlushResult::Sent {
+                class: DatagramClass::Control,
+                bytes: 3
+            }
+        );
+        assert_eq!(queues.control_len(), 0);
+        assert_eq!(queues.flush_one(|_, _| unreachable!()), DatagramFlushResult::Empty);
+    }
+
+    #[test]
+    fn flush_one_rejects_partial_udp_send_without_consuming_record() {
+        let mut queues = TurnUdpSendQueues::<1, 1, 8, 8, 8>::new();
+        queues.push_peer_data(destination(), &[1, 2, 3, 4]).unwrap();
+
+        assert_eq!(
+            queues.flush_one(|_, _| DatagramSendAttempt::Sent(2)),
+            DatagramFlushResult::PartialDatagram {
+                class: DatagramClass::PeerData,
+                expected: 4,
+                actual: 2,
+            }
+        );
+        assert_eq!(queues.peer_data_len(), 1);
+        assert_eq!(queues.peer_data_queued_bytes(), 4);
     }
 
     #[test]
