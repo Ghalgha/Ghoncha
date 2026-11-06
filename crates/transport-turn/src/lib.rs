@@ -55,6 +55,140 @@ pub struct OutboundDatagram {
     pub len: usize,
 }
 
+/// A bounded datagram retained until the socket confirms a complete UDP send.
+struct QueuedDatagram<const MAX_DATAGRAM: usize> {
+    destination: SocketAddr,
+    len: usize,
+    bytes: [u8; MAX_DATAGRAM],
+}
+
+/// Borrowed view of the next datagram waiting for socket transmission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PendingDatagram<'a> {
+    pub destination: SocketAddr,
+    pub bytes: &'a [u8],
+}
+
+/// Why a datagram could not be added to a bounded send queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatagramQueueError {
+    DatagramTooLarge { maximum: usize, actual: usize },
+    RecordCapacityReached,
+    ByteCapacityReached { maximum: usize, queued: usize, incoming: usize },
+}
+
+/// Fixed-capacity UDP send queue.
+///
+/// The front item remains unchanged until `pop_sent` is called after the OS
+/// reports a complete datagram send. A WouldBlock result must leave the item
+/// in place. Both record count and aggregate bytes are bounded at compile time.
+pub struct DatagramSendQueue<
+    const CAPACITY: usize,
+    const MAX_DATAGRAM: usize,
+    const MAX_QUEUED_BYTES: usize,
+> {
+    entries: [Option<QueuedDatagram<MAX_DATAGRAM>>; CAPACITY],
+    head: usize,
+    len: usize,
+    queued_bytes: usize,
+}
+
+impl<const CAPACITY: usize, const MAX_DATAGRAM: usize, const MAX_QUEUED_BYTES: usize>
+    DatagramSendQueue<CAPACITY, MAX_DATAGRAM, MAX_QUEUED_BYTES>
+{
+    pub fn new() -> Self {
+        Self {
+            entries: core::array::from_fn(|_| None),
+            head: 0,
+            len: 0,
+            queued_bytes: 0,
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub const fn queued_bytes(&self) -> usize {
+        self.queued_bytes
+    }
+
+    /// Copies one already-encoded UDP datagram into bounded queue storage.
+    pub fn push(
+        &mut self,
+        destination: SocketAddr,
+        datagram: &[u8],
+    ) -> Result<(), DatagramQueueError> {
+        if datagram.len() > MAX_DATAGRAM {
+            return Err(DatagramQueueError::DatagramTooLarge {
+                maximum: MAX_DATAGRAM,
+                actual: datagram.len(),
+            });
+        }
+        if self.len == CAPACITY {
+            return Err(DatagramQueueError::RecordCapacityReached);
+        }
+        let next_bytes = self.queued_bytes.saturating_add(datagram.len());
+        if next_bytes > MAX_QUEUED_BYTES {
+            return Err(DatagramQueueError::ByteCapacityReached {
+                maximum: MAX_QUEUED_BYTES,
+                queued: self.queued_bytes,
+                incoming: datagram.len(),
+            });
+        }
+
+        // len == CAPACITY was rejected above, so CAPACITY is nonzero here.
+        let tail = (self.head + self.len) % CAPACITY;
+        let mut bytes = [0; MAX_DATAGRAM];
+        bytes[..datagram.len()].copy_from_slice(datagram);
+        self.entries[tail] = Some(QueuedDatagram {
+            destination,
+            len: datagram.len(),
+            bytes,
+        });
+        self.len += 1;
+        self.queued_bytes = next_bytes;
+        Ok(())
+    }
+
+    /// Returns the next datagram without removing or modifying it.
+    ///
+    /// Call repeatedly after WouldBlock; the returned bytes and destination
+    /// remain identical until `pop_sent` succeeds.
+    pub fn front(&self) -> Option<PendingDatagram<'_>> {
+        let entry = self.entries.get(self.head)?.as_ref()?;
+        Some(PendingDatagram {
+            destination: entry.destination,
+            bytes: &entry.bytes[..entry.len],
+        })
+    }
+
+    /// Removes the front datagram after a complete successful UDP send.
+    pub fn pop_sent(&mut self) -> Option<usize> {
+        let entry = self.entries[self.head].take()?;
+        self.queued_bytes -= entry.len;
+        self.len -= 1;
+        self.head = if self.head + 1 == CAPACITY {
+            0
+        } else {
+            self.head + 1
+        };
+        Some(entry.len)
+    }
+}
+
+impl<const CAPACITY: usize, const MAX_DATAGRAM: usize, const MAX_QUEUED_BYTES: usize> Default
+    for DatagramSendQueue<CAPACITY, MAX_DATAGRAM, MAX_QUEUED_BYTES>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Sans-I/O TURN-over-UDP protocol state.
 ///
 /// The TURN credentials are copied into the upstream client state. Never log
@@ -266,6 +400,74 @@ fn to_instant(now: MonotonicTime) -> Result<Instant, TurnError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn destination() -> SocketAddr {
+        "198.51.100.1:3478".parse().unwrap()
+    }
+
+    #[test]
+    fn send_queue_retains_exact_datagram_across_would_block() {
+        let mut queue = DatagramSendQueue::<3, 64, 128>::new();
+        let first = [1, 2, 3, 4, 5];
+        let second = [9, 8, 7];
+        queue.push(destination(), &first).unwrap();
+        queue.push("198.51.100.2:3478".parse().unwrap(), &second).unwrap();
+
+        // Re-reading front models a WouldBlock result: no state is consumed.
+        for _ in 0..3 {
+            let pending = queue.front().unwrap();
+            assert_eq!(pending.destination, destination());
+            assert_eq!(pending.bytes, first);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue.queued_bytes(), 8);
+        }
+
+        assert_eq!(queue.pop_sent(), Some(first.len()));
+        let pending = queue.front().unwrap();
+        assert_eq!(pending.destination, "198.51.100.2:3478".parse().unwrap());
+        assert_eq!(pending.bytes, second);
+        assert_eq!(queue.pop_sent(), Some(second.len()));
+        assert!(queue.is_empty());
+        assert_eq!(queue.queued_bytes(), 0);
+    }
+
+    #[test]
+    fn send_queue_enforces_record_byte_and_datagram_limits() {
+        let mut queue = DatagramSendQueue::<1, 4, 3>::new();
+        assert_eq!(
+            queue.push(destination(), &[1, 2, 3, 4, 5]),
+            Err(DatagramQueueError::DatagramTooLarge {
+                maximum: 4,
+                actual: 5
+            })
+        );
+        queue.push(destination(), &[1, 2, 3]).unwrap();
+        assert_eq!(
+            queue.push(destination(), &[4]),
+            Err(DatagramQueueError::RecordCapacityReached)
+        );
+        assert_eq!(
+            queue.push(destination(), &[]),
+            Err(DatagramQueueError::RecordCapacityReached)
+        );
+        assert_eq!(queue.queued_bytes(), 3);
+        assert_eq!(queue.pop_sent(), Some(3));
+        assert_eq!(queue.queued_bytes(), 0);
+    }
+
+    #[test]
+    fn send_queue_reuses_ring_slots_without_reordering() {
+        let mut queue = DatagramSendQueue::<2, 8, 16>::new();
+        queue.push(destination(), &[1]).unwrap();
+        queue.push(destination(), &[2]).unwrap();
+        assert_eq!(queue.pop_sent(), Some(1));
+        queue.push(destination(), &[3]).unwrap();
+        assert_eq!(queue.front().unwrap().bytes, &[2]);
+        assert_eq!(queue.pop_sent(), Some(1));
+        assert_eq!(queue.front().unwrap().bytes, &[3]);
+        assert_eq!(queue.pop_sent(), Some(1));
+        assert!(queue.is_empty());
+    }
 
     #[test]
     fn rejects_unbound_local_port() {
