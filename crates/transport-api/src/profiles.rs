@@ -51,6 +51,19 @@ pub enum FlowPlanError {
     NoIndependentFlows,
 }
 
+/// A bounded live adjustment required to reach a profile's target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FlowReconfiguration {
+    /// The active flow count already equals the requested target.
+    Unchanged,
+    /// Add this many flows, creating them gradually while the tunnel stays up.
+    Add { count: u16 },
+    /// Drain this many flows after their in-flight records are handled.
+    Drain { count: u16 },
+    /// The adapter cannot resize flows without replacing its transport session.
+    LiveResizeUnsupported { target_flows: u16 },
+}
+
 impl ConnectionProfile {
     /// Resolves a profile without exceeding the adapter's advertised limit.
     ///
@@ -103,6 +116,30 @@ impl ConnectionProfile {
 }
 
 impl FlowPlan {
+    /// Plans a live transition from the current count to this profile's target.
+    ///
+    /// The returned action is declarative: the runtime must add or drain flows
+    /// incrementally, preserve in-flight records, and keep the VPN tunnel active.
+    pub const fn reconfiguration(self, current_flows: u16) -> FlowReconfiguration {
+        if current_flows == self.target_flows {
+            return FlowReconfiguration::Unchanged;
+        }
+        if !self.supports_live_resize {
+            return FlowReconfiguration::LiveResizeUnsupported {
+                target_flows: self.target_flows,
+            };
+        }
+        if current_flows < self.target_flows {
+            FlowReconfiguration::Add {
+                count: self.target_flows - current_flows,
+            }
+        } else {
+            FlowReconfiguration::Drain {
+                count: current_flows - self.target_flows,
+            }
+        }
+    }
+
     /// Returns the next one-flow increase, bounded by the resolved plan.
     ///
     /// The caller must first establish that more capacity is needed and that
@@ -221,5 +258,38 @@ mod tests {
         assert_eq!(plan.target_flows, 8);
         assert_eq!(plan.maximum_flows, 8);
         assert!(plan.limited_by_transport);
+    }
+
+    #[test]
+    fn live_profile_switch_adds_or_drains_without_restarting_tunnel() {
+        let standard = ConnectionProfile::Standard.resolve(LIVE).unwrap();
+        let saving = ConnectionProfile::EnergySaving.resolve(LIVE).unwrap();
+
+        assert_eq!(
+            standard.reconfiguration(1),
+            FlowReconfiguration::Add { count: 34 }
+        );
+        assert_eq!(
+            saving.reconfiguration(35),
+            FlowReconfiguration::Drain { count: 34 }
+        );
+        assert_eq!(
+            saving.reconfiguration(1),
+            FlowReconfiguration::Unchanged
+        );
+    }
+
+    #[test]
+    fn unsupported_live_resize_is_reported_without_reconnect_fallback() {
+        let capabilities = FlowCapabilities {
+            max_independent_flows: 40,
+            supports_live_resize: false,
+        };
+        let saving = ConnectionProfile::EnergySaving.resolve(capabilities).unwrap();
+
+        assert_eq!(
+            saving.reconfiguration(35),
+            FlowReconfiguration::LiveResizeUnsupported { target_flows: 1 }
+        );
     }
 }
