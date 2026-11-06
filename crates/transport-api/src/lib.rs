@@ -1091,10 +1091,7 @@ mod stream_framing_tests {
             &[0, 0, 0, 5, b'f', b'i', b'r', b's', b't']
         );
         assert!(!queue.advance_written(3).unwrap());
-        assert_eq!(
-            queue.front().unwrap(),
-            &[5, b'f', b'i', b'r', b's', b't']
-        );
+        assert_eq!(queue.front().unwrap(), &[5, b'f', b'i', b'r', b's', b't']);
         assert!(!queue.advance_written(2).unwrap());
         assert_eq!(queue.front().unwrap(), b"irst");
         assert!(queue.advance_written(4).unwrap());
