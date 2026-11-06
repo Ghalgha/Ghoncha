@@ -6,6 +6,9 @@
 //! TURN implementation, cryptographic implementation, or packet parser.
 //! Adapters exchange opaque authenticated tunnel records with the caller.
 
+mod credentials;
+pub use credentials::*;
+
 /// Stable, implementation-defined transport identifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TransportId(pub &'static str);
