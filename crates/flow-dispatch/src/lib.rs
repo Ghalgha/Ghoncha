@@ -1,12 +1,12 @@
 #![no_std]
 
-pub mod allocation_policy;
-
 //! Bounded, allocation-free inner-flow affinity dispatcher.
 //!
 //! The first implementation deliberately provides stable affinity only. It
 //! does not stripe packets, perform weighted placement, or migrate live flows
 //! for load balancing. Those features require separate measurement and tests.
+
+pub mod allocation_policy;
 
 use ghoncha_packet::flow::FlowKey;
 
