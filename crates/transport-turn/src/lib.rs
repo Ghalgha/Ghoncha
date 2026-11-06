@@ -389,8 +389,10 @@ impl<
         if removed.is_some() {
             match class {
                 DatagramClass::Control => {
-                    self.consecutive_control_sends =
-                        self.consecutive_control_sends.saturating_add(1).min(CONTROL_BURST_LIMIT);
+                    self.consecutive_control_sends = self
+                        .consecutive_control_sends
+                        .saturating_add(1)
+                        .min(CONTROL_BURST_LIMIT);
                 }
                 DatagramClass::PeerData => self.consecutive_control_sends = 0,
             }
