@@ -27,8 +27,12 @@ pub struct TurnEndpoint<'a> {
 /// Short-lived TURN credentials borrowed from the provider.
 ///
 /// This type intentionally does not implement Debug or Clone. Callers must not
-/// persist or log the username, credential, realm, or endpoint URIs.
+/// persist or log the username, credential, realm, or endpoint URIs. The
+/// provider owns the backing storage and is responsible for zeroizing secret
+/// material when credentials are invalidated or the provider is dropped.
 pub struct TurnCredentials<'a> {
+    /// Network generation for which these credentials were acquired.
+    pub network_generation: u64,
     pub username: &'a str,
     pub credential: &'a [u8],
     pub realm: Option<&'a str>,
