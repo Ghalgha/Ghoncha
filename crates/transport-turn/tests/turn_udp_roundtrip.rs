@@ -30,6 +30,7 @@ fn exchange_client_request(
     relay_v6: SocketAddr,
     now: MonotonicTime,
 ) -> Vec<Transmit<Vec<u8>>> {
+    let _ = engine.poll(now).unwrap();
     let outgoing = engine
         .poll_transmit(now)
         .unwrap()
