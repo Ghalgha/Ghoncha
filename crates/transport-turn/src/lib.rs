@@ -791,6 +791,19 @@ pub struct TurnUdpIoProgress {
     pub write_would_block: bool,
 }
 
+/// Result of advancing TURN protocol timers and checking pending control output.
+///
+/// The reactor must schedule the next wakeup from `protocol`'s
+/// `TurnPollRet::WaitUntil` value. Socket readiness and incoming events may
+/// require an earlier poll. A full bounded control queue leaves pending
+/// protocol output untouched and reports `queue_blocked`.
+#[derive(Debug)]
+pub struct TurnUdpControlPoll {
+    pub protocol: TurnPollRet,
+    pub queued_control: bool,
+    pub queue_blocked: bool,
+}
+
 /// Owns one UDP socket, one TURN Allocation state machine, and bounded queues.
 ///
 /// This driver deliberately does not create or bind sockets. The platform
@@ -857,29 +870,64 @@ impl<
         }
     }
 
-    /// Advances TURN timers and queues at most one pending control datagram.
+    /// Advances TURN timers and returns the protocol's next wakeup deadline.
     ///
-    /// Call this from the shared event loop when the driver's deadline expires
-    /// or after relevant socket activity; do not create a task per packet.
-    pub fn poll_control(&mut self, now: MonotonicTime) -> Result<bool, TurnUdpDriverError> {
+    /// The reactor should schedule `TurnPollRet::WaitUntil` directly rather
+    /// than periodically polling every Allocation. Socket readiness or newly
+    /// received data may require an earlier call. At most one control datagram
+    /// is queued per call.
+    pub fn poll_control_with_deadline(
+        &mut self,
+        now: MonotonicTime,
+    ) -> Result<TurnUdpControlPoll, TurnUdpDriverError> {
         self.ensure_active()?;
-        // Advance timers even under queue backpressure. Do not consume the
-        // pending control transaction until enough bounded queue capacity exists.
-        self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
-        self.queues
-            .ensure_control_capacity(MAX_DATAGRAM)
-            .map_err(TurnUdpDriverError::Queue)?;
+        let protocol = self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
+
+        match self.queues.ensure_control_capacity(MAX_DATAGRAM) {
+            Ok(()) => {}
+            Err(DatagramQueueError::RecordCapacityReached)
+            | Err(DatagramQueueError::ByteCapacityReached { .. }) => {
+                return Ok(TurnUdpControlPoll {
+                    protocol,
+                    queued_control: false,
+                    queue_blocked: true,
+                });
+            }
+            Err(error) => return Err(TurnUdpDriverError::Queue(error)),
+        }
+
         let Some(transmit) = self
             .engine
             .poll_transmit(now)
             .map_err(TurnUdpDriverError::Turn)?
         else {
-            return Ok(false);
+            return Ok(TurnUdpControlPoll {
+                protocol,
+                queued_control: false,
+                queue_blocked: false,
+            });
         };
         self.queues
             .push_control_transmit(&transmit)
             .map_err(TurnUdpDriverError::Queue)?;
-        Ok(true)
+        Ok(TurnUdpControlPoll {
+            protocol,
+            queued_control: true,
+            queue_blocked: false,
+        })
+    }
+
+    /// Compatibility wrapper when the caller does not need timer scheduling.
+    ///
+    /// New reactor integrations should use `poll_control_with_deadline`.
+    pub fn poll_control(&mut self, now: MonotonicTime) -> Result<bool, TurnUdpDriverError> {
+        self.poll_control_with_deadline(now)
+            .map(|progress| progress.queued_control)
+    }
+
+    /// Drains one TURN lifecycle event produced by protocol polling or receive.
+    pub fn poll_event(&mut self) -> Option<TurnEvent> {
+        self.engine.poll_event()
     }
 
     /// Encodes and queues one peer payload in caller-owned scratch storage.
