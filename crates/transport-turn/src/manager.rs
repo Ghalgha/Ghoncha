@@ -117,9 +117,9 @@ impl ManagedAllocation {
 /// unique within this manager.
 ///
 /// Capacity counts independent client transport sessions/5-tuples, not the
-/// number of relayed address-family allocations returned by one engine. A
-/// dual-stack TURN request can create multiple server-side relay addresses
-/// over one client session; it does not create additional parallel workers.
+/// number of relayed addresses returned by one engine. RFC 8656 dual allocation
+/// can provide IPv4 and IPv6 relayed addresses under the same client 5-tuple;
+/// it does not create additional parallel worker sessions.
 pub struct TurnAllocationManager<const CAPACITY: usize, const FLOW_CAPACITY: usize = 1024> {
     slots: [Option<ManagedAllocation>; CAPACITY],
     len: usize,
