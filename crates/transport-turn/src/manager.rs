@@ -256,10 +256,16 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         now_ns: u64,
         effective_maximum: usize,
     ) -> Result<FlowAdmissionDecision, AllocationManagerError> {
-        let mut workers = [Worker { id: 0, eligible: false }; CAPACITY];
+        let mut workers = [Worker {
+            id: 0,
+            eligible: false,
+        }; CAPACITY];
         let mut count = 0;
         for slot in self.slots.iter().flatten() {
-            workers[count] = Worker { id: slot.id, eligible: slot.state == AllocationState::Active };
+            workers[count] = Worker {
+                id: slot.id,
+                eligible: slot.state == AllocationState::Active,
+            };
             count += 1;
         }
         let eligible = &workers[..count];
@@ -267,13 +273,16 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
             return Ok(FlowAdmissionDecision::Dispatched(existing));
         }
         match self.admit_new_flow(true, effective_maximum) {
-            AdmissionDecision::Use { allocation_id } => self.flow_dispatcher
+            AdmissionDecision::Use { allocation_id } => self
+                .flow_dispatcher
                 .dispatch_to(key, now_ns, eligible, allocation_id)
                 .map(FlowAdmissionDecision::Dispatched)
                 .map_err(AllocationManagerError::Dispatch),
             AdmissionDecision::OpenAllocation => Ok(FlowAdmissionDecision::OpenAllocation),
             AdmissionDecision::Backpressure => Ok(FlowAdmissionDecision::Backpressure),
-            AdmissionDecision::NoActiveAllocations => Ok(FlowAdmissionDecision::NoActiveAllocations),
+            AdmissionDecision::NoActiveAllocations => {
+                Ok(FlowAdmissionDecision::NoActiveAllocations)
+            },
         }
     }
 
