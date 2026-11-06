@@ -200,6 +200,19 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
         self.metrics
     }
 
+    /// Removes affinity entries for a retired worker before its ID is reused.
+    /// Call only after the worker has no in-flight packets.
+    pub fn forget_worker(&mut self, worker_id: u16) -> usize {
+        let mut removed = 0;
+        for entry in &mut self.entries {
+            if matches!(entry, Some(value) if value.worker_id == worker_id) {
+                *entry = None;
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     /// Counts current flow assignments to one worker for telemetry.
     pub fn assigned_flows(&self, worker_id: u16) -> usize {
         self.entries
@@ -345,6 +358,16 @@ mod tests {
             dispatcher.dispatch(key(1), 0, &workers),
             Err(DispatchError::NoEligibleWorkers)
         );
+    }
+
+    #[test]
+    fn retired_worker_affinity_is_removed_before_id_reuse() {
+        let mut dispatcher = FlowDispatcher::<8>::new();
+        let first = dispatcher.dispatch(key(5353), 1, &WORKERS).unwrap();
+        assert_eq!(dispatcher.forget_worker(first.worker_id), 1);
+        assert_eq!(dispatcher.assigned_flows(first.worker_id), 0);
+        let next = dispatcher.dispatch(key(5353), 2, &WORKERS).unwrap();
+        assert_eq!(next.kind, DispatchKind::NewFlow);
     }
 
     #[test]
