@@ -718,7 +718,17 @@ pub trait TurnDatagramSocket {
         destination: SocketAddr,
         datagram: &[u8],
     ) -> Result<usize, DatagramSocketError>;
-    fn recv_from(&mut self, buffer: &mut [u8]) -> Result<(usize, SocketAddr), DatagramSocketError>;
+    fn recv_from(&mut self, buffer: &mut [u8]) -> Result<DatagramReceive, DatagramSocketError>;
+}
+
+/// Metadata for one received UDP datagram.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DatagramReceive {
+    /// Number of bytes copied into the supplied buffer.
+    pub len: usize,
+    pub from: SocketAddr,
+    /// True when the platform reports that the datagram exceeded the buffer.
+    pub truncated: bool,
 }
 
 /// Portable socket error categories. Platform adapters should preserve their
@@ -747,6 +757,8 @@ pub enum TurnUdpDriverError {
 #[derive(Debug)]
 pub enum TurnUdpDriverReceive<'a> {
     WouldBlock,
+    /// A datagram was truncated by the socket adapter and was discarded.
+    Truncated { from: SocketAddr },
     Datagram(TurnReceiveResult<'a>),
 }
 
@@ -917,7 +929,7 @@ impl<
         now: MonotonicTime,
     ) -> Result<TurnUdpDriverReceive<'a>, TurnUdpDriverError> {
         self.ensure_active()?;
-        let (len, from) = match self.socket.recv_from(buffer) {
+        let received = match self.socket.recv_from(buffer) {
             Ok(received) => received,
             Err(DatagramSocketError::WouldBlock) => {
                 return Ok(TurnUdpDriverReceive::WouldBlock);
@@ -928,15 +940,18 @@ impl<
                 return Err(TurnUdpDriverError::Socket(error));
             }
         };
-        if len > buffer.len() {
+        if received.truncated {
+            return Ok(TurnUdpDriverReceive::Truncated { from: received.from });
+        }
+        if received.len > buffer.len() {
             self.retired = true;
             self.engine.protocol_error();
             return Err(TurnUdpDriverError::Turn(TurnError::BufferTooSmall {
-                required: len,
+                required: received.len,
             }));
         }
         self.engine
-            .receive_datagram(from, &buffer[..len], now)
+            .receive_datagram(received.from, &buffer[..received.len], now)
             .map(TurnUdpDriverReceive::Datagram)
             .map_err(TurnUdpDriverError::Turn)
     }
@@ -1003,14 +1018,23 @@ impl TurnDatagramSocket for std::net::UdpSocket {
         })
     }
 
-    fn recv_from(&mut self, buffer: &mut [u8]) -> Result<(usize, SocketAddr), DatagramSocketError> {
-        std::net::UdpSocket::recv_from(self, buffer).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
-                DatagramSocketError::WouldBlock
-            } else {
-                DatagramSocketError::Failed
-            }
-        })
+    fn recv_from(&mut self, buffer: &mut [u8]) -> Result<DatagramReceive, DatagramSocketError> {
+        std::net::UdpSocket::recv_from(self, buffer)
+            .map(|(len, from)| DatagramReceive {
+                len,
+                from,
+                // std::net does not expose MSG_TRUNC. Reject an exactly-full
+                // buffer conservatively rather than risk parsing a truncated
+                // TURN datagram as complete.
+                truncated: len == buffer.len(),
+            })
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    DatagramSocketError::WouldBlock
+                } else {
+                    DatagramSocketError::Failed
+                }
+            })
     }
 }
 
