@@ -282,6 +282,7 @@ struct MockDatagramSocket {
     sent: Vec<(SocketAddr, Vec<u8>)>,
     inbound: VecDeque<(SocketAddr, Vec<u8>)>,
     block_next_send: bool,
+    fail_next_send: bool,
 }
 
 impl TurnDatagramSocket for MockDatagramSocket {
@@ -297,6 +298,10 @@ impl TurnDatagramSocket for MockDatagramSocket {
         if self.block_next_send {
             self.block_next_send = false;
             return Err(DatagramSocketError::WouldBlock);
+        }
+        if self.fail_next_send {
+            self.fail_next_send = false;
+            return Err(DatagramSocketError::Failed);
         }
         self.sent.push((destination, datagram.to_vec()));
         Ok(datagram.len())
@@ -323,6 +328,7 @@ fn socket_owning_driver_retains_control_datagram_across_would_block() {
         sent: Vec::new(),
         inbound: VecDeque::new(),
         block_next_send: true,
+        fail_next_send: false,
     };
 
     let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
@@ -371,6 +377,7 @@ fn socket_driver_parts_preserve_pending_control_datagram() {
         sent: Vec::new(),
         inbound: VecDeque::new(),
         block_next_send: false,
+        fail_next_send: false,
     };
 
     let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
@@ -385,4 +392,53 @@ fn socket_driver_parts_preserve_pending_control_datagram() {
     let (_socket, _engine, queues) = driver.into_parts();
     assert_eq!(queues.control_len(), 1);
     assert_eq!(queues.peer_data_len(), 0);
+}
+
+
+#[test]
+fn socket_driver_retires_after_fatal_send_error() {
+    let client_addr: SocketAddr = "192.0.2.12:40002".parse().unwrap();
+    let server_addr: SocketAddr = "198.51.100.12:3478".parse().unwrap();
+    let socket = MockDatagramSocket {
+        local: client_addr,
+        sent: Vec::new(),
+        inbound: VecDeque::new(),
+        block_next_send: false,
+        fail_next_send: true,
+    };
+
+    let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
+        socket,
+        server_addr,
+        "ghoncha-test-user",
+        "ghoncha-test-pass",
+    )
+    .unwrap();
+
+    assert!(driver.poll_control(MonotonicTime(0)).unwrap());
+    assert!(matches!(
+        driver.flush_one(),
+        Err(ghoncha_transport_turn::TurnUdpDriverError::Socket(
+            DatagramSocketError::Failed
+        ))
+    ));
+    assert!(matches!(
+        driver.poll_control(MonotonicTime(1)),
+        Err(ghoncha_transport_turn::TurnUdpDriverError::Retired)
+    ));
+    let mut receive_buffer = [0u8; 128];
+    assert!(matches!(
+        driver.receive_one(&mut receive_buffer, MonotonicTime(1)),
+        Err(ghoncha_transport_turn::TurnUdpDriverError::Retired)
+    ));
+    let mut encoded_buffer = [0u8; 1500];
+    assert!(matches!(
+        driver.queue_peer_data(
+            "203.0.113.20:51820".parse().unwrap(),
+            &[1, 2, 3],
+            MonotonicTime(1),
+            &mut encoded_buffer,
+        ),
+        Err(ghoncha_transport_turn::TurnUdpDriverError::Retired)
+    ));
 }
