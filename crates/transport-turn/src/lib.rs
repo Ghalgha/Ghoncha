@@ -710,7 +710,10 @@ impl TurnUdpEngine {
 ///
 /// Implementations must bind the socket to the intended underlay network and,
 /// on Android, protect it from the VPN before the first send. One driver owns
-/// one socket for one TURN Allocation.
+/// one socket for one TURN Allocation. Receive implementations must never
+/// report truncated datagrams as complete; when the native API cannot
+/// distinguish truncation from an exact buffer fill, conservatively set
+/// DatagramReceive::truncated when len == buffer.len().
 pub trait TurnDatagramSocket {
     fn local_addr(&self) -> SocketAddr;
     fn send_to(
@@ -836,12 +839,12 @@ impl<
     /// or after relevant socket activity; do not create a task per packet.
     pub fn poll_control(&mut self, now: MonotonicTime) -> Result<bool, TurnUdpDriverError> {
         self.ensure_active()?;
-        // Reserve worst-case queue capacity before advancing protocol state:
-        // poll_transmit may consume a pending control transaction.
+        // Advance timers even under queue backpressure. Do not consume the
+        // pending control transaction until enough bounded queue capacity exists.
+        self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
         self.queues
             .ensure_control_capacity(MAX_DATAGRAM)
             .map_err(TurnUdpDriverError::Queue)?;
-        self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
         let Some(transmit) = self
             .engine
             .poll_transmit(now)
