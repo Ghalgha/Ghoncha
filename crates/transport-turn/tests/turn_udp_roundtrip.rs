@@ -2,7 +2,7 @@ use core::net::SocketAddr;
 use std::time::Duration;
 
 use ghoncha_transport_api::MonotonicTime;
-use ghoncha_transport_turn::TurnUdpEngine;
+use ghoncha_transport_turn::{TurnRelayFamilies, TurnUdpEngine};
 use turn_client_proto::types::Instant;
 use turn_client_proto::udp::{TurnEvent, TurnPollRet, TurnRecvRet};
 use turn_server_proto::api::{TurnServerApi, TurnServerPollRet};
@@ -117,11 +117,12 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
     );
     server.set_nonce_expiry_duration(Duration::from_secs(30));
 
-    let mut client = TurnUdpEngine::new(
+    let mut client = TurnUdpEngine::new_with_relay_families(
         client_addr,
         server_addr,
         "ghoncha-test-user",
         "ghoncha-test-pass",
+        TurnRelayFamilies::DualStack,
     )
     .unwrap();
 
