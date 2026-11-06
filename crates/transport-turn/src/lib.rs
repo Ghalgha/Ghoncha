@@ -249,6 +249,8 @@ pub enum DatagramFlushResult {
 /// Control traffic is selected first so sustained user-data traffic cannot
 /// leave allocation refreshes or permission/channel transactions waiting
 /// behind a bulk FIFO. Each class has its own record and byte budget.
+const CONTROL_BURST_LIMIT: u8 = 8;
+
 pub struct TurnUdpSendQueues<
     const CONTROL_CAPACITY: usize,
     const PEER_CAPACITY: usize,
@@ -258,6 +260,7 @@ pub struct TurnUdpSendQueues<
 > {
     control: DatagramSendQueue<CONTROL_CAPACITY, MAX_DATAGRAM, CONTROL_MAX_BYTES>,
     peer_data: DatagramSendQueue<PEER_CAPACITY, MAX_DATAGRAM, PEER_MAX_BYTES>,
+    consecutive_control_sends: u8,
 }
 
 impl<
@@ -279,6 +282,7 @@ impl<
         Self {
             control: DatagramSendQueue::new(),
             peer_data: DatagramSendQueue::new(),
+            consecutive_control_sends: 0,
         }
     }
 
@@ -359,8 +363,14 @@ impl<
         }
     }
 
-    /// Selects control traffic first, preserving FIFO order within each class.
+    /// Selects control traffic first, but serves peer data after a bounded
+    /// burst of successful control sends. FIFO order is preserved per class.
     pub fn next(&self) -> Option<(DatagramClass, PendingDatagram<'_>)> {
+        if self.consecutive_control_sends >= CONTROL_BURST_LIMIT {
+            if let Some(datagram) = self.peer_data.front() {
+                return Some((DatagramClass::PeerData, datagram));
+            }
+        }
         if let Some(datagram) = self.control.front() {
             return Some((DatagramClass::Control, datagram));
         }
@@ -369,12 +379,23 @@ impl<
             .map(|datagram| (DatagramClass::PeerData, datagram))
     }
 
-    /// Removes the selected class's front item after a complete socket send.
+    /// Removes the selected class's front item after a complete socket send
+    /// and updates the bounded control-burst scheduler.
     pub fn pop_sent(&mut self, class: DatagramClass) -> Option<usize> {
-        match class {
+        let removed = match class {
             DatagramClass::Control => self.control.pop_sent(),
             DatagramClass::PeerData => self.peer_data.pop_sent(),
+        };
+        if removed.is_some() {
+            match class {
+                DatagramClass::Control => {
+                    self.consecutive_control_sends =
+                        self.consecutive_control_sends.saturating_add(1).min(CONTROL_BURST_LIMIT);
+                }
+                DatagramClass::PeerData => self.consecutive_control_sends = 0,
+            }
         }
+        removed
     }
 
     pub const fn control_len(&self) -> usize {
@@ -797,6 +818,30 @@ mod tests {
             })
         );
         assert_eq!(queues.peer_data_len(), 0);
+    }
+
+    #[test]
+    fn peer_data_gets_service_after_bounded_control_burst() {
+        let mut queues = TurnUdpSendQueues::<10, 1, 8, 80, 8>::new();
+        for value in 0..10 {
+            queues.push_control(destination(), &[value]).unwrap();
+        }
+        queues.push_peer_data(destination(), &[99]).unwrap();
+
+        for _ in 0..CONTROL_BURST_LIMIT {
+            let (class, _) = queues.next().unwrap();
+            assert_eq!(class, DatagramClass::Control);
+            assert_eq!(queues.pop_sent(class), Some(1));
+        }
+
+        let (class, pending) = queues.next().unwrap();
+        assert_eq!(class, DatagramClass::PeerData);
+        assert_eq!(pending.bytes, &[99]);
+        assert_eq!(queues.pop_sent(class), Some(1));
+
+        let (class, pending) = queues.next().unwrap();
+        assert_eq!(class, DatagramClass::Control);
+        assert_eq!(pending.bytes, &[8]);
     }
 
     #[test]
