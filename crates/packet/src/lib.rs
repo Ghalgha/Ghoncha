@@ -220,10 +220,7 @@ mod tests {
         assert_eq!(packet.next_header(), 17);
         assert_eq!(packet.hop_limit(), 64);
         assert_eq!(packet.source(), IpAddress::V4([192, 0, 2, 1]));
-        assert_eq!(
-            packet.destination(),
-            IpAddress::V4([198, 51, 100, 2])
-        );
+        assert_eq!(packet.destination(), IpAddress::V4([198, 51, 100, 2]));
     }
 
     #[test]
@@ -298,10 +295,7 @@ mod tests {
     #[test]
     fn rejects_truncated_and_unknown_packets() {
         assert_eq!(IpPacket::parse(&[]), Err(PacketError::Empty));
-        assert_eq!(
-            IpPacket::parse(&[0x45]),
-            Err(PacketError::TruncatedHeader)
-        );
+        assert_eq!(IpPacket::parse(&[0x45]), Err(PacketError::TruncatedHeader));
         assert_eq!(
             IpPacket::parse(&[0x70]),
             Err(PacketError::UnsupportedVersion(7))
