@@ -266,10 +266,7 @@ mod tests {
         bytes[2..4].copy_from_slice(&(IPV4_MIN_HEADER_LEN as u16).to_be_bytes());
         bytes[6..8].copy_from_slice(&0x8000_u16.to_be_bytes());
 
-        assert_eq!(
-            IpPacket::parse(&bytes),
-            Err(PacketError::InvalidIpv4Flags)
-        );
+        assert_eq!(IpPacket::parse(&bytes), Err(PacketError::InvalidIpv4Flags));
     }
 
     #[test]
