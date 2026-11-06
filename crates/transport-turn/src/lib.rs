@@ -772,6 +772,16 @@ pub enum TurnUdpDriverReceive<'a> {
     Datagram(TurnReceiveResult<'a>),
 }
 
+/// Per-readiness work completed by the bounded UDP driver pump.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TurnUdpIoProgress {
+    pub received_datagrams: usize,
+    pub truncated_datagrams: usize,
+    pub sent_datagrams: usize,
+    pub read_would_block: bool,
+    pub write_would_block: bool,
+}
+
 /// Owns one UDP socket, one TURN Allocation state machine, and bounded queues.
 ///
 /// This driver deliberately does not create or bind sockets. The platform
@@ -937,6 +947,69 @@ impl<
             return Err(TurnUdpDriverError::PartialDatagram { expected, actual });
         }
         Ok(result)
+    }
+
+    /// Services a readiness notification with explicit per-call work limits.
+    ///
+    /// The caller registers the socket with its shared reactor and invokes this
+    /// method only for the readiness directions reported by that reactor.
+    /// Reads and writes stop at WouldBlock or their respective budgets. The
+    /// callback must consume borrowed peer data before returning; it must not
+    /// retain references into the receive buffer.
+    pub fn service_ready<F>(
+        &mut self,
+        readable: bool,
+        writable: bool,
+        now: MonotonicTime,
+        receive_buffer: &mut [u8],
+        max_receive_datagrams: usize,
+        max_send_datagrams: usize,
+        mut on_datagram: F,
+    ) -> Result<TurnUdpIoProgress, TurnUdpDriverError>
+    where
+        F: for<'a> FnMut(TurnReceiveResult<'a>),
+    {
+        self.ensure_active()?;
+        let mut progress = TurnUdpIoProgress::default();
+
+        if writable {
+            for _ in 0..max_send_datagrams {
+                match self.flush_one()? {
+                    DatagramFlushResult::Sent { .. } => {
+                        progress.sent_datagrams += 1;
+                    }
+                    DatagramFlushResult::WouldBlock { .. } => {
+                        progress.write_would_block = true;
+                        break;
+                    }
+                    DatagramFlushResult::Empty => break,
+                    DatagramFlushResult::Failed { .. }
+                    | DatagramFlushResult::PartialDatagram { .. } => {
+                        unreachable!("flush_one converts socket failures into errors");
+                    }
+                }
+            }
+        }
+
+        if readable {
+            for _ in 0..max_receive_datagrams {
+                match self.receive_one(receive_buffer, now)? {
+                    TurnUdpDriverReceive::WouldBlock => {
+                        progress.read_would_block = true;
+                        break;
+                    }
+                    TurnUdpDriverReceive::Truncated { .. } => {
+                        progress.truncated_datagrams += 1;
+                    }
+                    TurnUdpDriverReceive::Datagram(datagram) => {
+                        progress.received_datagrams += 1;
+                        on_datagram(datagram);
+                    }
+                }
+            }
+        }
+
+        Ok(progress)
     }
 
     /// Receives and processes at most one datagram into caller-owned storage.
