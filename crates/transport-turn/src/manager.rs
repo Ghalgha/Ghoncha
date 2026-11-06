@@ -74,6 +74,7 @@ pub enum AllocationManagerError {
     NotDraining,
     NotDeallocating,
     DeallocationNotConfirmed,
+    InvalidStateTransition,
     PendingWorkRemains,
     Dispatch(DispatchError),
 }
@@ -311,6 +312,9 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         let slot = self
             .get_mut(id)
             .ok_or(AllocationManagerError::UnknownAllocation)?;
+        if slot.state != AllocationState::Active {
+            return Err(AllocationManagerError::InvalidStateTransition);
+        }
         slot.state = AllocationState::Draining;
         Ok(())
     }
@@ -324,12 +328,13 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         let slot = self
             .get_mut(id)
             .ok_or(AllocationManagerError::UnknownAllocation)?;
-        if slot.state == AllocationState::Active {
-            return Err(AllocationManagerError::NotDraining);
+        if !matches!(slot.state, AllocationState::Draining | AllocationState::Unhealthy) {
+            return Err(AllocationManagerError::InvalidStateTransition);
         }
         if slot.load.in_flight_packets != 0 || slot.load.queued_bytes != 0 {
             return Err(AllocationManagerError::PendingWorkRemains);
         }
+        slot.deallocation_confirmed = false;
         slot.state = AllocationState::Deallocating;
         Ok(())
     }
@@ -386,6 +391,9 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         let slot = self
             .get_mut(id)
             .ok_or(AllocationManagerError::UnknownAllocation)?;
+        if !matches!(slot.state, AllocationState::Active | AllocationState::Draining) {
+            return Err(AllocationManagerError::InvalidStateTransition);
+        }
         slot.state = AllocationState::Unhealthy;
         Ok(())
     }
@@ -714,6 +722,49 @@ mod tests {
         manager.confirm_deallocation(1).unwrap();
         let retired = manager.take_drained(1).unwrap();
         assert_eq!(retired.local_addr().port(), 40001);
+    }
+
+    #[test]
+    fn allocation_lifecycle_rejects_invalid_state_transitions() {
+        let mut manager = TurnAllocationManager::<1>::new();
+        manager.insert(1, engine(40001)).unwrap();
+
+        assert_eq!(
+            manager.begin_deallocation(1),
+            Err(AllocationManagerError::InvalidStateTransition)
+        );
+        manager.begin_drain(1).unwrap();
+        assert_eq!(
+            manager.begin_drain(1),
+            Err(AllocationManagerError::InvalidStateTransition)
+        );
+        manager.begin_deallocation(1).unwrap();
+        assert_eq!(
+            manager.begin_drain(1),
+            Err(AllocationManagerError::InvalidStateTransition)
+        );
+        assert_eq!(
+            manager.mark_unhealthy(1),
+            Err(AllocationManagerError::InvalidStateTransition)
+        );
+    }
+
+    #[test]
+    fn confirmed_deallocation_cannot_be_reentered() {
+        let mut manager = TurnAllocationManager::<1>::new();
+        manager.insert(1, engine(40001)).unwrap();
+        manager.begin_drain(1).unwrap();
+        manager.begin_deallocation(1).unwrap();
+        manager.confirm_deallocation(1).unwrap();
+
+        assert_eq!(
+            manager.begin_deallocation(1),
+            Err(AllocationManagerError::InvalidStateTransition)
+        );
+        assert_eq!(
+            manager.take_drained(1).unwrap().local_addr().port(),
+            40001
+        );
     }
 
     #[test]
