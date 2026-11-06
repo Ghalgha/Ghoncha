@@ -180,7 +180,10 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
                 self.entries[index] = Some(entry);
                 self.metrics.lookups = self.metrics.lookups.saturating_add(1);
                 self.metrics.affinity_hits = self.metrics.affinity_hits.saturating_add(1);
-                return Some(DispatchDecision { worker_id: entry.worker_id, kind: DispatchKind::AffinityHit });
+                return Some(DispatchDecision {
+                worker_id: entry.worker_id,
+                kind: DispatchKind::AffinityHit,
+            });
             }
             if self.entries[index].is_none() { break; }
         }
@@ -216,13 +219,19 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
                         entry.last_seen_ns = entry.last_seen_ns.max(now_ns);
                         self.entries[index] = Some(entry);
                         self.metrics.affinity_hits = self.metrics.affinity_hits.saturating_add(1);
-                        return Ok(DispatchDecision { worker_id: entry.worker_id, kind: DispatchKind::AffinityHit });
+                        return Ok(DispatchDecision {
+                        worker_id: entry.worker_id,
+                        kind: DispatchKind::AffinityHit,
+                    });
                     }
                     entry.worker_id = preferred_worker_id;
                     entry.last_seen_ns = now_ns;
                     self.entries[index] = Some(entry);
                     self.metrics.remaps = self.metrics.remaps.saturating_add(1);
-                    return Ok(DispatchDecision { worker_id: preferred_worker_id, kind: DispatchKind::RemappedAfterWorkerLoss });
+                    return Ok(DispatchDecision {
+                        worker_id: preferred_worker_id,
+                        kind: DispatchKind::RemappedAfterWorkerLoss,
+                    });
                 }
                 None if vacant.is_none() => vacant = Some(index),
                 _ => {}
@@ -232,9 +241,16 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
             self.metrics.table_full = self.metrics.table_full.saturating_add(1);
             return Err(DispatchError::FlowTableFull);
         };
-        self.entries[index] = Some(Entry { key, worker_id: preferred_worker_id, last_seen_ns: now_ns });
+        self.entries[index] = Some(Entry {
+            key,
+            worker_id: preferred_worker_id,
+            last_seen_ns: now_ns,
+        });
         self.metrics.new_assignments = self.metrics.new_assignments.saturating_add(1);
-        Ok(DispatchDecision { worker_id: preferred_worker_id, kind: DispatchKind::NewFlow })
+        Ok(DispatchDecision {
+            worker_id: preferred_worker_id,
+            kind: DispatchKind::NewFlow,
+        })
     }
 
     /// Expires at most max_scan table slots, using a persistent scan cursor.
