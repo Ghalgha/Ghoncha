@@ -149,29 +149,34 @@ impl<const CAPACITY: usize, const MAX_DATAGRAM: usize, const MAX_QUEUED_BYTES: u
         self.queued_bytes
     }
 
+    fn check_capacity(&self, incoming: usize) -> Result<(), DatagramQueueError> {
+        if incoming > MAX_DATAGRAM {
+            return Err(DatagramQueueError::DatagramTooLarge {
+                maximum: MAX_DATAGRAM,
+                actual: incoming,
+            });
+        }
+        if self.len == CAPACITY {
+            return Err(DatagramQueueError::RecordCapacityReached);
+        }
+        let next_bytes = self.queued_bytes.saturating_add(incoming);
+        if next_bytes > MAX_QUEUED_BYTES {
+            return Err(DatagramQueueError::ByteCapacityReached {
+                maximum: MAX_QUEUED_BYTES,
+                queued: self.queued_bytes,
+                incoming,
+            });
+        }
+        Ok(())
+    }
+
     /// Copies one already-encoded UDP datagram into bounded queue storage.
     pub fn push(
         &mut self,
         destination: SocketAddr,
         datagram: &[u8],
     ) -> Result<(), DatagramQueueError> {
-        if datagram.len() > MAX_DATAGRAM {
-            return Err(DatagramQueueError::DatagramTooLarge {
-                maximum: MAX_DATAGRAM,
-                actual: datagram.len(),
-            });
-        }
-        if self.len == CAPACITY {
-            return Err(DatagramQueueError::RecordCapacityReached);
-        }
-        let next_bytes = self.queued_bytes.saturating_add(datagram.len());
-        if next_bytes > MAX_QUEUED_BYTES {
-            return Err(DatagramQueueError::ByteCapacityReached {
-                maximum: MAX_QUEUED_BYTES,
-                queued: self.queued_bytes,
-                incoming: datagram.len(),
-            });
-        }
+        self.check_capacity(datagram.len())?;
 
         // len == CAPACITY was rejected above, so CAPACITY is nonzero here.
         let tail = (self.head + self.len) % CAPACITY;
@@ -305,6 +310,14 @@ impl<
             peer_data: DatagramSendQueue::new(),
             consecutive_control_sends: 0,
         }
+    }
+
+    fn ensure_control_capacity(&self, maximum_datagram: usize) -> Result<(), DatagramQueueError> {
+        self.control.check_capacity(maximum_datagram)
+    }
+
+    fn ensure_peer_capacity(&self, maximum_datagram: usize) -> Result<(), DatagramQueueError> {
+        self.peer_data.check_capacity(maximum_datagram)
     }
 
     pub fn push_control(
@@ -793,6 +806,11 @@ impl<
     /// Call this from the shared event loop when the driver's deadline expires
     /// or after relevant socket activity; do not create a task per packet.
     pub fn poll_control(&mut self, now: MonotonicTime) -> Result<bool, TurnUdpDriverError> {
+        // Reserve worst-case queue capacity before advancing protocol state:
+        // poll_transmit may consume a pending control transaction.
+        self.queues
+            .ensure_control_capacity(MAX_DATAGRAM)
+            .map_err(TurnUdpDriverError::Queue)?;
         self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
         let Some(transmit) = self
             .engine
@@ -815,9 +833,19 @@ impl<
         now: MonotonicTime,
         encoded_buffer: &mut [u8],
     ) -> Result<usize, TurnUdpDriverError> {
+        // Ensure both scratch storage and queue budgets can hold the largest
+        // datagram before asking the TURN engine to build/consume this send.
+        if encoded_buffer.len() < MAX_DATAGRAM {
+            return Err(TurnUdpDriverError::Turn(TurnError::BufferTooSmall {
+                required: MAX_DATAGRAM,
+            }));
+        }
+        self.queues
+            .ensure_peer_capacity(MAX_DATAGRAM)
+            .map_err(TurnUdpDriverError::Queue)?;
         let outbound = self
             .engine
-            .send_to_into(peer, payload, now, encoded_buffer)
+            .send_to_into(peer, payload, now, &mut encoded_buffer[..MAX_DATAGRAM])
             .map_err(TurnUdpDriverError::Turn)?;
         self.queues
             .push_peer_output(outbound, encoded_buffer)
