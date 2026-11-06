@@ -427,10 +427,10 @@ mod tests {
             manager.admit_new_flow(true, 2),
             AdmissionDecision::OpenAllocation
         );
-        assert_eq!(
-            manager.take_drained(1).unwrap_err(),
-            AllocationManagerError::InFlightWorkRemains
-        );
+        assert!(matches!(
+            manager.take_drained(1),
+            Err(AllocationManagerError::InFlightWorkRemains)
+        ));
         manager
             .update_load(1, AllocationLoad::IDLE)
             .unwrap();
