@@ -83,7 +83,8 @@ impl FlowKey {
             FlowDiscriminator::Ports {
                 source: u16::from_be_bytes([bytes[payload_offset], bytes[payload_offset + 1]]),
                 destination: u16::from_be_bytes([
-                    bytes[payload_offset + 2], bytes[payload_offset + 3],
+                    bytes[payload_offset + 2],
+                    bytes[payload_offset + 3],
                 ]),
             }
         } else {
@@ -105,7 +106,10 @@ impl FlowKey {
         hash_address(&mut hash, self.source);
         hash_address(&mut hash, self.destination);
         match self.discriminator {
-            FlowDiscriminator::Ports { source, destination } => {
+            FlowDiscriminator::Ports {
+                source,
+                destination,
+            } => {
                 hash_byte(&mut hash, 1);
                 for byte in source.to_be_bytes() {
                     hash_byte(&mut hash, byte);
@@ -177,7 +181,10 @@ mod tests {
         let packet = IpPacket::parse(&bytes).unwrap();
         assert_eq!(
             FlowKey::from_packet(&packet).unwrap().discriminator,
-            FlowDiscriminator::Ports { source: 0x1234, destination: 80 }
+            FlowDiscriminator::Ports {
+                source: 0x1234,
+                destination: 80
+            }
         );
     }
 
