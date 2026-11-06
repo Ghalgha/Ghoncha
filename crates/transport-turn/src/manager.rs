@@ -108,7 +108,9 @@ pub struct TurnAllocationManager<const CAPACITY: usize, const FLOW_CAPACITY: usi
     flow_dispatcher: FlowDispatcher<FLOW_CAPACITY>,
 }
 
-impl<const CAPACITY: usize, const FLOW_CAPACITY: usize> TurnAllocationManager<CAPACITY, FLOW_CAPACITY> {
+impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
+    TurnAllocationManager<CAPACITY, FLOW_CAPACITY>
+{
     pub fn new() -> Self {
         Self {
             slots: core::array::from_fn(|_| None),
@@ -239,14 +241,15 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize> TurnAllocationManager<CA
 
     /// Assigns a parsed inner flow to one active Allocation.
     /// Existing flows stay pinned; remapping occurs only after worker loss.
-    pub fn dispatch_flow(&mut self, key: FlowKey, now_ns: u64) -> Result<DispatchDecision, AllocationManagerError> {
-        let mut workers = [
-            Worker {
-                id: 0,
-                eligible: false,
-            };
-            CAPACITY
-        ];
+    pub fn dispatch_flow(
+        &mut self,
+        key: FlowKey,
+        now_ns: u64,
+    ) -> Result<DispatchDecision, AllocationManagerError> {
+        let mut workers = [Worker {
+            id: 0,
+            eligible: false,
+        }; CAPACITY];
         let mut count = 0;
         for slot in self.slots.iter().flatten() {
             workers[count] = Worker {
