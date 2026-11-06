@@ -240,18 +240,35 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize> TurnAllocationManager<CA
     /// Assigns a parsed inner flow to one active Allocation.
     /// Existing flows stay pinned; remapping occurs only after worker loss.
     pub fn dispatch_flow(&mut self, key: FlowKey, now_ns: u64) -> Result<DispatchDecision, AllocationManagerError> {
-        let mut workers = [Worker { id: 0, eligible: false }; CAPACITY];
+        let mut workers = [
+            Worker {
+                id: 0,
+                eligible: false,
+            };
+            CAPACITY
+        ];
         let mut count = 0;
         for slot in self.slots.iter().flatten() {
-            workers[count] = Worker { id: slot.id, eligible: slot.state == AllocationState::Active };
+            workers[count] = Worker {
+                id: slot.id,
+                eligible: slot.state == AllocationState::Active,
+            };
             count += 1;
         }
-        self.flow_dispatcher.dispatch(key, now_ns, &workers[..count]).map_err(AllocationManagerError::Dispatch)
+        self.flow_dispatcher
+            .dispatch(key, now_ns, &workers[..count])
+            .map_err(AllocationManagerError::Dispatch)
     }
 
     /// Expires idle flow entries with an explicit scan budget.
-    pub fn expire_idle_flows(&mut self, now_ns: u64, idle_timeout_ns: u64, max_scan: usize) -> usize {
-        self.flow_dispatcher.expire_idle(now_ns, idle_timeout_ns, max_scan)
+    pub fn expire_idle_flows(
+        &mut self,
+        now_ns: u64,
+        idle_timeout_ns: u64,
+        max_scan: usize,
+    ) -> usize {
+        self.flow_dispatcher
+            .expire_idle(now_ns, idle_timeout_ns, max_scan)
     }
 
     pub const fn flow_dispatch_metrics(&self) -> ghoncha_flow_dispatch::DispatchMetrics {
@@ -311,7 +328,9 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize> TurnAllocationManager<CA
     }
 }
 
-impl<const CAPACITY: usize, const FLOW_CAPACITY: usize> Default for TurnAllocationManager<CAPACITY, FLOW_CAPACITY> {
+impl<const CAPACITY: usize, const FLOW_CAPACITY: usize> Default
+    for TurnAllocationManager<CAPACITY, FLOW_CAPACITY>
+{
     fn default() -> Self {
         Self::new()
     }
