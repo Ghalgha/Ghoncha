@@ -470,13 +470,21 @@ mod tests {
     #[test]
     fn lookup_survives_a_deleted_entry_before_a_colliding_flow() {
         let workers = [
-            Worker { id: 10, eligible: true },
-            Worker { id: 20, eligible: true },
+            Worker {
+                id: 10,
+                eligible: true,
+            },
+            Worker {
+                id: 20,
+                eligible: true,
+            },
         ];
         let mut dispatcher = FlowDispatcher::<8>::new();
         let first = (1..=u16::MAX)
             .map(key)
-            .find(|candidate| candidate.stable_hash() as usize % 8 == key(1).stable_hash() as usize % 8)
+            .find(|candidate| {
+                candidate.stable_hash() as usize % 8 == key(1).stable_hash() as usize % 8
+            })
             .unwrap();
         let second = (1..=u16::MAX)
             .map(key)
