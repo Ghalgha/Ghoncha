@@ -194,7 +194,10 @@ The CSQTT TURN engine remains an important comparison implementation. Compare wi
 `dimpl 0.9.0` (released 2026-10-25) is a Sans-I/O DTLS 1.2/1.3 candidate with explicit version constructors and an event-loop-oriented design. It is a candidate for the **client-to-GHONCHA-gateway application DTLS association**, not a TURN client and not the TURN-to-relay security wrapper.
 - prove DTLS 1.2 interoperability with the reference CSQTT/WDTT client and server wire behavior;
 - verify certificate or PSK peer authentication and reject insecure verification shortcuts;
-- the library exposes the peer certificate but explicitly leaves PKI/fingerprint/name validation to the application; GHONCHA must implement and test strict pin/identity validation;
+- the library exposes the peer certificate but explicitly leaves PKI/fingerprint/name validation to the application; GHONCHA must validate the certificate fingerprint against authenticated provisioning and must not send WireGuard application data until that check succeeds;
+- prefer the certificate-based DTLS 1.2 ECDHE-ECDSA profile for the first interoperability test; evaluate PSK mode separately because the documented DTLS 1.2 PSK suite uses AES-128-CCM with an 8-byte tag;
+- every fatal error from the public DTLS processing API requires discarding the DTLS instance and starting a new handshake; transient malformed/replayed datagrams are handled internally by the library;
+- the release documents no session resumption or renegotiation, so measure full-handshake cost during network handover and call/credential refresh;
 - test retransmission, fragmentation, replay handling, key lifecycle and malformed records;
 - verify Android NDK targets and crypto dependency portability;
 - its 0.9.0 manifest declares edition 2024, MSRV 1.89.0, and MIT OR Apache-2.0;
