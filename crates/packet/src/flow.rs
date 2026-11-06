@@ -267,15 +267,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_ipv6_extension_chain() {
+    fn treats_ipv6_esp_as_opaque_network_affinity() {
         let mut bytes = std::vec![0_u8; 41];
         bytes[0] = 0x60;
         bytes[4..6].copy_from_slice(&1_u16.to_be_bytes());
-        bytes[6] = 0;
-        assert_eq!(
-            FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
-            Err(FlowKeyError::UnsupportedIpv6Extension(0))
-        );
+        bytes[6] = 50; // ESP payload is encrypted and cannot expose TCP/UDP ports.
+
+        let key = FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()).unwrap();
+        assert_eq!(key.protocol, 50);
+        assert_eq!(key.discriminator, FlowDiscriminator::Network);
     }
 
     fn ipv6_fragment(reserved: u8, offset_flags: u16, id: u32) -> std::vec::Vec<u8> {
