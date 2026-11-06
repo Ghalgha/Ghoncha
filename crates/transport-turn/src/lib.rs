@@ -234,7 +234,10 @@ impl TurnUdpEngine {
             return Err(TurnError::BufferTooSmall { required });
         }
 
-        let transmit = build.write_into(output);
+        // DelayedTransmitBuild implementations may require an exact-size
+        // destination. Pass only the encoded prefix, not the caller's full
+        // reusable buffer, which may intentionally be larger.
+        let transmit = build.write_into(&mut output[..required]);
         Ok(OutboundDatagram {
             destination: transmit.to,
             len: transmit.data.len(),
