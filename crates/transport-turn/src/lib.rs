@@ -735,7 +735,10 @@ pub enum TurnUdpDriverError {
     Turn(TurnError),
     Queue(DatagramQueueError),
     Socket(DatagramSocketError),
-    PartialDatagram { expected: usize, actual: usize },
+    PartialDatagram {
+        expected: usize,
+        actual: usize,
+    },
     /// The socket or protocol failed; this Allocation driver is no longer usable.
     Retired,
 }
