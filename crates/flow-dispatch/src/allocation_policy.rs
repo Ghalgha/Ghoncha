@@ -53,12 +53,12 @@ pub fn choose_allocation(
     let mut best: Option<(u32, u16)> = None;
 
     for load in loads.iter().filter(|load| load.healthy) {
-        if load.pressure_ppm < threshold {
-            if best.is_none_or(|(pressure, id)| {
+        if load.pressure_ppm < threshold
+            && best.is_none_or(|(pressure, id)| {
                 load.pressure_ppm < pressure || (load.pressure_ppm == pressure && load.id < id)
             }) {
-                best = Some((load.pressure_ppm, load.id));
-            }
+            best = Some((load.pressure_ppm, load.id));
+        }
         }
     }
 
