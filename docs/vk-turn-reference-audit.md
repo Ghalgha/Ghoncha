@@ -135,6 +135,23 @@ Repository: https://github.com/Afteroid/csqttr
 
 GitHub metadata reports `NOASSERTION` license. Verify permissions before code reuse.
 
+### 2.6.1 CSQTT DTLS source-level security findings
+
+Inspected source files on the repository default branch on 2026-11-06:
+- `shared/dtls.rs` (custom DTLS 1.2 handshake, record protection and SRTP key derivation);
+- `rust-client/session.rs` (client handshake call site and fallback policy).
+
+These are findings about the inspected source revision, not a claim that every released binary or fork has identical behavior.
+
+1. **Peer certificate pin is optional and not enabled at the inspected call site.** `DtlsClientHandshake::accept_certificate` checks the certificate fingerprint only when `pinned_fingerprint` is set. The inspected `run_dtls_handshake` constructs `DtlsClientHandshake::new()` and does not call `pin_fingerprint`. The client therefore verifies the ECDSA ServerKeyExchange signature against the presented certificate, but does not establish that the certificate belongs to the intended server. A self-signed certificate controlled by an active intermediary can satisfy that handshake. GHONCHA must require a configured peer identity (pinned certificate/public key or authenticated PSK) before treating the DTLS session as authenticated.
+2. **Record sequence wraps.** `RecordProtector::protect` increments the 48-bit sequence and masks it back to zero. Reusing the same AES-GCM key/IV after sequence exhaustion reuses nonces. GHONCHA must fail closed or rekey before exhaustion; it must never wrap a sequence under the same key.
+3. **Record and handshake parsers accept incomplete trailing bytes.** `parse_dtls_records` and `parse_handshake_messages` stop when fewer than a complete header remains and return already-parsed messages. GHONCHA's parser boundary should reject trailing partial headers rather than silently accepting a truncated datagram.
+4. **Record-header validation needs tightening.** The inspected record protector builds AAD using the DTLS 1.2 version constant rather than validating and binding the received record version. It also reads the explicit GCM nonce from the record without checking that it matches the record epoch/sequence. GHONCHA must validate the supported version and explicit nonce against the record header before accepting the record.
+5. **Hot-path allocation cost is significant.** The inspected parser returns vectors of record/message views, and record protect/unprotect creates new vectors. This is acceptable as a research reference but conflicts with GHONCHA's low-allocation data-plane goal. Measure and replace with bounded caller-owned buffers or a vetted library with reusable output buffers.
+6. **Automatic security-mode downgrade is not a safe default.** The inspected session code can fall back from a failed DTLS-SRTP handshake to a legacy WRAP-SRTP mode in AUTO configuration. GHONCHA must not silently downgrade peer authentication or cryptographic guarantees. A transport fallback may change the carrier, but it must preserve the same authenticated tunnel security policy.
+
+**GHONCHA decision:** do not copy the custom DTLS implementation or its handshake/record code. Use it as an interoperability and test-vector reference only. Evaluate a maintained DTLS implementation, and add an application-owned peer identity check because the candidate `dimpl` library explicitly leaves certificate validation to its embedder. Never ship an unauthenticated certificate mode.
+
 ## 3. What GHONCHA should learn from these projects
 
 1. **Use TURN as the carrier, DTLS as the protected client-server transport, and a separate authenticated VPN gateway.** Do not confuse TURN relay with the VPN gateway.
