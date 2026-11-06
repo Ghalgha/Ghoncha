@@ -1,8 +1,8 @@
 //! Canonical inner-IP flow identity for packet-affinity scheduling.
 //!
-//! This module is allocation-free. IPv6 extension-header chains other than a
-//! directly visible Fragment header are rejected until a bounded extension
-//! walker is implemented; callers must use a conservative fallback.
+//! This module is allocation-free. IPv6 extension headers are walked with strict
+//! header-count and byte limits; unsupported opaque protocols use network-level
+affinity.
 
 #[cfg(test)]
 extern crate std;
@@ -29,11 +29,11 @@ pub enum FlowDiscriminator {
     Network,
 }
 
-/// Why a packet could not be assigned a fully parsed flow key.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 const IPV6_MAX_EXTENSION_HEADERS: usize = 8;
 const IPV6_MAX_EXTENSION_BYTES: usize = 256;
 
+/// Why a packet could not be assigned a fully parsed flow key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FlowKeyError {
     UnsupportedIpv6Extension(u8),
     InvalidIpv6FragmentHeader,
