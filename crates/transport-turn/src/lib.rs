@@ -882,10 +882,22 @@ impl<
         self.queues
             .ensure_peer_capacity(MAX_DATAGRAM)
             .map_err(TurnUdpDriverError::Queue)?;
-        let outbound = self
-            .engine
-            .send_to_into(peer, payload, now, &mut encoded_buffer[..MAX_DATAGRAM])
-            .map_err(TurnUdpDriverError::Turn)?;
+        let outbound = match self.engine.send_to_into(
+            peer,
+            payload,
+            now,
+            &mut encoded_buffer[..MAX_DATAGRAM],
+        ) {
+            Ok(outbound) => outbound,
+            Err(error @ TurnError::BufferTooSmall { .. }) => {
+                // The engine has already retired its protocol state because
+                // the delayed send build could not fit. Keep the driver state
+                // in sync so no later operation can reuse this Allocation.
+                self.retired = true;
+                return Err(TurnUdpDriverError::Turn(error));
+            }
+            Err(error) => return Err(TurnUdpDriverError::Turn(error)),
+        };
         self.queues
             .push_peer_output(outbound, encoded_buffer)
             .map_err(TurnUdpDriverError::Queue)?;
