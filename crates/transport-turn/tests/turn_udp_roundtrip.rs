@@ -394,7 +394,6 @@ fn socket_driver_parts_preserve_pending_control_datagram() {
     assert_eq!(queues.peer_data_len(), 0);
 }
 
-
 #[test]
 fn socket_driver_retires_after_fatal_send_error() {
     let client_addr: SocketAddr = "192.0.2.12:40002".parse().unwrap();
