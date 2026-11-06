@@ -17,6 +17,7 @@ Status: design baseline; implementation choices remain subject to interoperabili
 3. **TURN relay** implements RFC 8656. It authenticates and allocates relay resources, applies peer permissions, and forwards opaque datagrams. It is not the VPN gateway.
 4. **VPN gateway** terminates the WireGuard peer session, validates/decrypts tunnel packets, routes inner IPv4/IPv6 packets, applies forwarding policy and NAT where configured, and returns packets through the tunnel.
 5. **Rust server control plane** provisions peers, keys, addresses, routes, quotas, and gateway lifecycle. It must not handle every packet in a high-level request/task abstraction.
+6. **VK Calls transport adapter (experimental)** establishes a user-authorized WebRTC call path when explicitly provisioned. It carries encrypted GHONCHA tunnel records over a supported and verified DataChannel or media-track mode. VK call signalling and SFU infrastructure are not GHONCHA identity or gateway; the GHONCHA peer remains the authenticated tunnel endpoint. Public SDK limitations and undocumented signalling risks are specified in `docs/vk-calls-transport.md`.
 
 ## Tunnel cryptography
 
