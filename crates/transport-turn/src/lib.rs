@@ -693,8 +693,6 @@ impl TurnUdpEngine {
     }
 }
 
-
-
 /// Non-blocking UDP socket operations required by the TURN driver.
 ///
 /// Implementations must bind the socket to the intended underlay network and,
@@ -707,10 +705,7 @@ pub trait TurnDatagramSocket {
         destination: SocketAddr,
         datagram: &[u8],
     ) -> Result<usize, DatagramSocketError>;
-    fn recv_from(
-        &mut self,
-        buffer: &mut [u8],
-    ) -> Result<(usize, SocketAddr), DatagramSocketError>;
+    fn recv_from(&mut self, buffer: &mut [u8]) -> Result<(usize, SocketAddr), DatagramSocketError>;
 }
 
 /// Portable socket error categories. Platform adapters should preserve their
@@ -785,12 +780,7 @@ impl<
         username: &str,
         password: &str,
     ) -> Result<Self, TurnError> {
-        let engine = TurnUdpEngine::new(
-            socket.local_addr(),
-            server_addr,
-            username,
-            password,
-        )?;
+        let engine = TurnUdpEngine::new(socket.local_addr(), server_addr, username, password)?;
         Ok(Self {
             socket,
             engine,
@@ -842,22 +832,26 @@ impl<
     pub fn flush_one(&mut self) -> Result<DatagramFlushResult, TurnUdpDriverError> {
         let socket = &mut self.socket;
         let mut socket_error = None;
-        let result = self.queues.flush_one(|destination, bytes| {
-            match socket.send_to(destination, bytes) {
-                Ok(sent) => DatagramSendAttempt::Sent(sent),
-                Err(DatagramSocketError::WouldBlock) => DatagramSendAttempt::WouldBlock,
-                Err(error) => {
-                    socket_error = Some(error);
-                    DatagramSendAttempt::Failed
-                }
-            }
-        });
+        let result =
+            self.queues.flush_one(
+                |destination, bytes| match socket.send_to(destination, bytes) {
+                    Ok(sent) => DatagramSendAttempt::Sent(sent),
+                    Err(DatagramSocketError::WouldBlock) => DatagramSendAttempt::WouldBlock,
+                    Err(error) => {
+                        socket_error = Some(error);
+                        DatagramSendAttempt::Failed
+                    }
+                },
+            );
 
         if let Some(error) = socket_error {
             self.engine.protocol_error();
             return Err(TurnUdpDriverError::Socket(error));
         }
-        if let DatagramFlushResult::PartialDatagram { expected, actual, .. } = result {
+        if let DatagramFlushResult::PartialDatagram {
+            expected, actual, ..
+        } = result
+        {
             self.engine.protocol_error();
             return Err(TurnUdpDriverError::PartialDatagram { expected, actual });
         }
@@ -937,10 +931,7 @@ impl TurnDatagramSocket for std::net::UdpSocket {
         })
     }
 
-    fn recv_from(
-        &mut self,
-        buffer: &mut [u8],
-    ) -> Result<(usize, SocketAddr), DatagramSocketError> {
+    fn recv_from(&mut self, buffer: &mut [u8]) -> Result<(usize, SocketAddr), DatagramSocketError> {
         std::net::UdpSocket::recv_from(self, buffer).map_err(|error| {
             if error.kind() == std::io::ErrorKind::WouldBlock {
                 DatagramSocketError::WouldBlock
