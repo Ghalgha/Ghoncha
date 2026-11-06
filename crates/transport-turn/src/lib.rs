@@ -169,7 +169,7 @@ impl<const CAPACITY: usize, const MAX_DATAGRAM: usize, const MAX_QUEUED_BYTES: u
 
     /// Removes the front datagram after a complete successful UDP send.
     pub fn pop_sent(&mut self) -> Option<usize> {
-        let entry = self.entries[self.head].take()?;
+        let entry = self.entries.get_mut(self.head)?.take()?;
         self.queued_bytes -= entry.len;
         self.len -= 1;
         self.head = if self.head + 1 == CAPACITY {
@@ -453,6 +453,33 @@ mod tests {
         assert_eq!(queue.queued_bytes(), 3);
         assert_eq!(queue.pop_sent(), Some(3));
         assert_eq!(queue.queued_bytes(), 0);
+    }
+
+    #[test]
+    fn send_queue_enforces_aggregate_byte_limit() {
+        let mut queue = DatagramSendQueue::<2, 4, 3>::new();
+        queue.push(destination(), &[1, 2, 3]).unwrap();
+        assert_eq!(
+            queue.push(destination(), &[4]),
+            Err(DatagramQueueError::ByteCapacityReached {
+                maximum: 3,
+                queued: 3,
+                incoming: 1
+            })
+        );
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.queued_bytes(), 3);
+    }
+
+    #[test]
+    fn zero_capacity_queue_fails_closed_without_panicking() {
+        let mut queue = DatagramSendQueue::<0, 4, 4>::new();
+        assert_eq!(
+            queue.push(destination(), &[1]),
+            Err(DatagramQueueError::RecordCapacityReached)
+        );
+        assert!(queue.front().is_none());
+        assert!(queue.pop_sent().is_none());
     }
 
     #[test]
