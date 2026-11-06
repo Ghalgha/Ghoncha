@@ -28,6 +28,18 @@ DTLS is used for authenticated key agreement and peer authentication; SRTP prote
 
 This is the standards-based candidate closest to the observed CSQTT topology. Keep a plain DTLS application-data carrier as a separate experimental profile only; do not mix DTLS application data with a negotiated DTLS-SRTP association. RFC 5764 specifies that after `use_srtp` negotiation, RTP/RTCP data is protected by SRTP and application data is not sent in DTLS application-data records.
 
+### Initial GHONCHA RTP payload profile
+
+The first implementation uses a strict private RTPv2 profile, not an audio/video codec:
+- dynamic payload type 127, negotiated by GHONCHA configuration;
+- marker bit always zero;
+- no CSRC entries, header extensions, or RTP padding;
+- exactly one complete WireGuard datagram per RTP payload; no fragmentation or multi-record aggregation;
+- one stable random SSRC per direction and a cryptographically random initial sequence number; SRTP owns rollover and replay state;
+- timestamp is a monotonic 90 kHz session clock and is not used as a packet sequence number.
+
+The profile has a fixed 12-byte RTP header and a zero-copy parser in `ghoncha-transport-api`. It rejects any unsupported RTP header feature instead of guessing. Payload type 127 is a private dynamic assignment, not a claim that the payload is Opus/VP8. If interoperability testing requires another payload type, change it through explicit authenticated configuration and keep the payload-format semantics documented.
+
 A separate TURN-over-TCP/TLS mode carries STUN/TURN framing over a stream. It requires explicit stream framing and bounded queues; TCP head-of-line blocking and retransmission behavior differ from UDP.
 
 ## 2. VK Calls credential and call lifecycle
