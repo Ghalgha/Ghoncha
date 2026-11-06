@@ -693,6 +693,264 @@ impl TurnUdpEngine {
     }
 }
 
+
+
+/// Non-blocking UDP socket operations required by the TURN driver.
+///
+/// Implementations must bind the socket to the intended underlay network and,
+/// on Android, protect it from the VPN before the first send. One driver owns
+/// one socket for one TURN Allocation.
+pub trait TurnDatagramSocket {
+    fn local_addr(&self) -> SocketAddr;
+    fn send_to(
+        &mut self,
+        destination: SocketAddr,
+        datagram: &[u8],
+    ) -> Result<usize, DatagramSocketError>;
+    fn recv_from(
+        &mut self,
+        buffer: &mut [u8],
+    ) -> Result<(usize, SocketAddr), DatagramSocketError>;
+}
+
+/// Portable socket error categories. Platform adapters should preserve their
+/// native error details in their own diagnostics while mapping them here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatagramSocketError {
+    WouldBlock,
+    Failed,
+}
+
+/// Errors surfaced by the socket-owning TURN driver.
+#[derive(Debug)]
+pub enum TurnUdpDriverError {
+    Turn(TurnError),
+    Queue(DatagramQueueError),
+    Socket(DatagramSocketError),
+    PartialDatagram { expected: usize, actual: usize },
+}
+
+/// Result of one bounded receive attempt.
+#[derive(Debug)]
+pub enum TurnUdpDriverReceive<'a> {
+    WouldBlock,
+    Datagram(TurnReceiveResult<'a>),
+}
+
+/// Owns one UDP socket, one TURN Allocation state machine, and bounded queues.
+///
+/// This driver deliberately does not create or bind sockets. The platform
+/// supplies a socket that is already bound to the selected network and
+/// protected from the VPN. No packet is forwarded through FFI.
+pub struct TurnUdpDriver<
+    S,
+    const CONTROL_CAPACITY: usize = 32,
+    const PEER_CAPACITY: usize = 256,
+    const MAX_DATAGRAM: usize = 2048,
+    const CONTROL_MAX_BYTES: usize = 16_384,
+    const PEER_MAX_BYTES: usize = 262_144,
+> {
+    socket: S,
+    engine: TurnUdpEngine,
+    queues: TurnUdpSendQueues<
+        CONTROL_CAPACITY,
+        PEER_CAPACITY,
+        MAX_DATAGRAM,
+        CONTROL_MAX_BYTES,
+        PEER_MAX_BYTES,
+    >,
+}
+
+impl<
+    S: TurnDatagramSocket,
+    const CONTROL_CAPACITY: usize,
+    const PEER_CAPACITY: usize,
+    const MAX_DATAGRAM: usize,
+    const CONTROL_MAX_BYTES: usize,
+    const PEER_MAX_BYTES: usize,
+>
+    TurnUdpDriver<
+        S,
+        CONTROL_CAPACITY,
+        PEER_CAPACITY,
+        MAX_DATAGRAM,
+        CONTROL_MAX_BYTES,
+        PEER_MAX_BYTES,
+    >
+{
+    /// Takes ownership of a pre-bound socket and creates its TURN state.
+    pub fn new(
+        socket: S,
+        server_addr: SocketAddr,
+        username: &str,
+        password: &str,
+    ) -> Result<Self, TurnError> {
+        let engine = TurnUdpEngine::new(
+            socket.local_addr(),
+            server_addr,
+            username,
+            password,
+        )?;
+        Ok(Self {
+            socket,
+            engine,
+            queues: TurnUdpSendQueues::new(),
+        })
+    }
+
+    /// Advances TURN timers and queues at most one pending control datagram.
+    ///
+    /// Call this from the shared event loop when the driver's deadline expires
+    /// or after relevant socket activity; do not create a task per packet.
+    pub fn poll_control(&mut self, now: MonotonicTime) -> Result<bool, TurnUdpDriverError> {
+        self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
+        let Some(transmit) = self
+            .engine
+            .poll_transmit(now)
+            .map_err(TurnUdpDriverError::Turn)?
+        else {
+            return Ok(false);
+        };
+        self.queues
+            .push_control_transmit(&transmit)
+            .map_err(TurnUdpDriverError::Queue)?;
+        Ok(true)
+    }
+
+    /// Encodes and queues one peer payload in caller-owned scratch storage.
+    pub fn queue_peer_data(
+        &mut self,
+        peer: SocketAddr,
+        payload: &[u8],
+        now: MonotonicTime,
+        encoded_buffer: &mut [u8],
+    ) -> Result<usize, TurnUdpDriverError> {
+        let outbound = self
+            .engine
+            .send_to_into(peer, payload, now, encoded_buffer)
+            .map_err(TurnUdpDriverError::Turn)?;
+        self.queues
+            .push_peer_output(outbound, encoded_buffer)
+            .map_err(TurnUdpDriverError::Queue)?;
+        Ok(outbound.len)
+    }
+
+    /// Attempts one non-blocking UDP send. WouldBlock retains the queue item.
+    ///
+    /// A fatal socket error or a partial UDP send invalidates this driver;
+    /// callers should drop it and establish a fresh Allocation/socket pair.
+    pub fn flush_one(&mut self) -> Result<DatagramFlushResult, TurnUdpDriverError> {
+        let socket = &mut self.socket;
+        let mut socket_error = None;
+        let result = self.queues.flush_one(|destination, bytes| {
+            match socket.send_to(destination, bytes) {
+                Ok(sent) => DatagramSendAttempt::Sent(sent),
+                Err(DatagramSocketError::WouldBlock) => DatagramSendAttempt::WouldBlock,
+                Err(error) => {
+                    socket_error = Some(error);
+                    DatagramSendAttempt::Failed
+                }
+            }
+        });
+
+        if let Some(error) = socket_error {
+            self.engine.protocol_error();
+            return Err(TurnUdpDriverError::Socket(error));
+        }
+        if let DatagramFlushResult::PartialDatagram { expected, actual, .. } = result {
+            self.engine.protocol_error();
+            return Err(TurnUdpDriverError::PartialDatagram { expected, actual });
+        }
+        Ok(result)
+    }
+
+    /// Receives and processes at most one datagram into caller-owned storage.
+    ///
+    /// Peer payloads borrow the buffer; consume them before reusing it. TURN
+    /// control messages are handled internally and are never exposed as VPN
+    /// payloads. WouldBlock is not an error.
+    pub fn receive_one<'a>(
+        &mut self,
+        buffer: &'a mut [u8],
+        now: MonotonicTime,
+    ) -> Result<TurnUdpDriverReceive<'a>, TurnUdpDriverError> {
+        let (len, from) = match self.socket.recv_from(buffer) {
+            Ok(received) => received,
+            Err(DatagramSocketError::WouldBlock) => {
+                return Ok(TurnUdpDriverReceive::WouldBlock);
+            }
+            Err(error) => {
+                self.engine.protocol_error();
+                return Err(TurnUdpDriverError::Socket(error));
+            }
+        };
+        if len > buffer.len() {
+            self.engine.protocol_error();
+            return Err(TurnUdpDriverError::Turn(TurnError::BufferTooSmall {
+                required: len,
+            }));
+        }
+        self.engine
+            .receive_datagram(from, &buffer[..len], now)
+            .map(TurnUdpDriverReceive::Datagram)
+            .map_err(TurnUdpDriverError::Turn)
+    }
+
+    pub const fn engine(&self) -> &TurnUdpEngine {
+        &self.engine
+    }
+
+    pub const fn queued_control(&self) -> usize {
+        self.queues.control_len()
+    }
+
+    pub const fn queued_peer_data(&self) -> usize {
+        self.queues.peer_data_len()
+    }
+
+    /// Consumes the driver and returns its socket and protocol state.
+    /// Pending datagrams are intentionally discarded; callers must drain or
+    /// explicitly abandon them before invoking this method.
+    pub fn into_parts(self) -> (S, TurnUdpEngine) {
+        (self.socket, self.engine)
+    }
+}
+
+#[cfg(feature = "std")]
+impl TurnDatagramSocket for std::net::UdpSocket {
+    fn local_addr(&self) -> SocketAddr {
+        std::net::UdpSocket::local_addr(self)
+            .expect("bound UDP socket must expose its local address")
+    }
+
+    fn send_to(
+        &mut self,
+        destination: SocketAddr,
+        datagram: &[u8],
+    ) -> Result<usize, DatagramSocketError> {
+        std::net::UdpSocket::send_to(self, datagram, destination).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                DatagramSocketError::WouldBlock
+            } else {
+                DatagramSocketError::Failed
+            }
+        })
+    }
+
+    fn recv_from(
+        &mut self,
+        buffer: &mut [u8],
+    ) -> Result<(usize, SocketAddr), DatagramSocketError> {
+        std::net::UdpSocket::recv_from(self, buffer).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                DatagramSocketError::WouldBlock
+            } else {
+                DatagramSocketError::Failed
+            }
+        })
+    }
+}
+
 fn to_instant(now: MonotonicTime) -> Result<Instant, TurnError> {
     let nanos = i64::try_from(now.0).map_err(|_| TurnError::TimeOutOfRange)?;
     Ok(Instant::from_nanos(nanos))
