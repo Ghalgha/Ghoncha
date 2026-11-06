@@ -310,10 +310,12 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         Ok(())
     }
 
-    /// Removes a drained engine only after all accepted packets have completed.
+    /// Removes a draining or unhealthy engine after its queued and in-flight
+    /// packet work has been resolved by the runtime.
     ///
-    /// The caller receives ownership and must send TURN Refresh(0)/Delete
-    /// control traffic before closing the corresponding socket.
+    /// For a healthy draining engine, the caller should send TURN Refresh(0)/Delete
+    /// before closing the socket. For an unhealthy engine, the caller may need
+    /// to close the socket without a successful deallocation transaction.
     pub fn take_drained(&mut self, id: u16) -> Result<TurnUdpEngine, AllocationManagerError> {
         let index = self
             .slots
@@ -323,7 +325,7 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         let slot = self.slots[index]
             .as_ref()
             .expect("located slot must be occupied");
-        if slot.state != AllocationState::Draining {
+        if slot.state == AllocationState::Active {
             return Err(AllocationManagerError::NotDraining);
         }
         if slot.load.in_flight_packets != 0 || slot.load.queued_bytes != 0 {
@@ -637,6 +639,30 @@ mod tests {
             manager.admit_new_flow(true, 2),
             AdmissionDecision::OpenAllocation
         );
+    }
+
+    #[test]
+    fn unhealthy_allocation_can_be_retired_after_pending_work_is_resolved() {
+        let mut manager = TurnAllocationManager::<1>::new();
+        manager.insert(1, engine(40001)).unwrap();
+        manager
+            .update_load(
+                1,
+                AllocationLoad {
+                    in_flight_packets: 1,
+                    ..AllocationLoad::IDLE
+                },
+            )
+            .unwrap();
+        manager.mark_unhealthy(1).unwrap();
+        assert!(matches!(
+            manager.take_drained(1),
+            Err(AllocationManagerError::PendingWorkRemains)
+        ));
+        manager.update_load(1, AllocationLoad::IDLE).unwrap();
+        let retired = manager.take_drained(1).unwrap();
+        assert_eq!(retired.local_addr().port(), 40001);
+        assert!(manager.is_empty());
     }
 
     #[test]
