@@ -180,6 +180,7 @@ Do not add all crates at once. Add and test one crate at a time. Do not pin TURN
 - For the reference VK proxy topology, start with the UDP TURN client: TURN/UDP is the outer hop to the VK relay. The GHONCHA client-to-gateway DTLS association is application data sent to the gateway peer through TURN; it is not DTLS between the client and the VK TURN server.
 - The crate also documents separate TLS-over-TCP and DTLS-over-UDP client extension crates. Those secure the client-to-TURN-server hop and are not interchangeable with the end-to-end DTLS carrier used by the reference projects.
 - It uses `turn-types` / `stun-proto` and has a documented API.
+- Its crate manifest declares MIT OR Apache-2.0. The upstream workspace manifest currently declares Rust 1.80 as its MSRV; verify the exact published 0.7.3 source package before pinning.
 - It is not yet selected for production. Verify its exact RFC 8656 coverage, VK server interoperability, credential/nonce behavior, Android cross-compilation, dependency graph, allocation behavior and license.
 
 The CSQTT TURN engine remains an important comparison implementation. Compare wire behavior and tests rather than assuming a newer crate is automatically more correct.
@@ -192,6 +193,8 @@ The CSQTT TURN engine remains an important comparison implementation. Compare wi
 - the library exposes the peer certificate but explicitly leaves PKI/fingerprint/name validation to the application; GHONCHA must implement and test strict pin/identity validation;
 - test retransmission, fragmentation, replay handling, key lifecycle and malformed records;
 - verify Android NDK targets and crypto dependency portability;
+- its 0.9.0 manifest declares edition 2024, MSRV 1.89.0, and MIT OR Apache-2.0;
+- the default feature set enables aws-lc-rs and rcgen; a separate rust-crypto feature exists. Compare Android ABI build size, compile time, CPU performance, and cryptographic-provider portability before selecting a provider;
 - review the project's security history and license.
 
 Do not use `rtc-dtls` solely because it is mature within WebRTC: its feature set and handshake expectations must be checked against this non-WebRTC client/server use case.
