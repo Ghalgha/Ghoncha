@@ -159,7 +159,48 @@ On user disconnect or permission revocation:
 - Stop retries, close tunnel and transport resources, and release owned descriptors.
 - A later network callback must not reconnect unless user intent and permission state allow it.
 
-## 6. Transport adapter contract
+## 6. VK Calls TURN credential-provider contract
+
+VK Calls is integrated as a TURN credential provider, not as a generic WebRTC DataChannel. Keep the provider independent from the TURN/DTLS data plane.
+
+The provider accepts one explicit user-authorized input:
+- a call link/hash supplied by the user; or
+- an authorized VK account session reference for creating/joining a call owned by the user.
+
+It returns a bounded, short-lived credential object:
+- provider/session identifier (opaque and non-secret);
+- TURN username and credential;
+- TURN realm/nonce metadata if supplied by the provider or learned from the TURN challenge;
+- validated TURN URI list and supported transport choices;
+- expiry/refresh metadata where available;
+- redacted failure category and diagnostic step.
+
+Provider lifecycle states:
+- `NotConfigured`
+- `AwaitingUserAuthorization`
+- `Bootstrapping`
+- `InteractiveVerificationRequired`
+- `CredentialsReady`
+- `CallUnavailable`
+- `RateLimited`
+- `CredentialsExpired`
+- `Revoked`
+- `Failed`
+
+A provider failure must not be disguised as a TURN allocation failure. Keep VK API/call bootstrap errors, interactive verification, TURN authentication errors, and network reachability errors distinct.
+
+The provider may use documented public VK API methods only where the official documentation confirms the method and its required authorization. Calls-specific bootstrap endpoints observed in reference projects are not assumed to be stable public API. Version them behind the provider, validate response schemas and sizes, and fail closed when an expected field changes. Do not bypass CAPTCHA, account security, anti-abuse controls, or rate limits; pause for supported user verification where required.
+
+Never persist raw call links, access tokens, TURN credentials, cookies, or session secrets in logs or analytics. Use Android secure storage for user-authorized account credentials, and keep short-lived TURN credentials in memory for the session. Explicit logout, call termination, permission revocation, or session replacement invalidates the provider result and dependent allocations.
+
+On credential expiry or call termination:
+1. Stop new allocations using the expired credential set.
+2. Mark dependent TURN allocations as expiring/invalid.
+3. Close and deallocate resources within bounded deadlines where the provider still accepts cleanup.
+4. Request fresh credentials only while user intent and authorization remain valid.
+5. Reconnect under the normal retry budget; do not create calls indefinitely in a background loop.
+
+## 7. Transport adapter contract
 
 The core-facing adapter contract is conceptually:
 
@@ -176,7 +217,7 @@ This is a semantic contract, not a mandate for a particular Rust trait syntax, a
 
 Adapter errors use stable categories: `DNS_FAILURE`, `SOCKET_PROTECTION_FAILED`, `NETWORK_BIND_FAILED`, `CONNECT_TIMEOUT`, `PROTOCOL_UNSUPPORTED`, `AUTHENTICATION_FAILED`, `REMOTE_UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `MTU_EXCEEDED`, `CLOSED`, and `INTERNAL`. Preserve the underlying layer and retryability separately; never turn all errors into a generic timeout.
 
-## 7. Transport selection and fallback policy
+## 8. Transport selection and fallback policy
 
 - Selection is policy-driven and based on measured reachability plus configured operator policy, not on a hardcoded country/operator allowlist.
 - Prefer the lowest-overhead authenticated datagram path when it is reachable and healthy.
@@ -187,7 +228,7 @@ Adapter errors use stable categories: `DNS_FAILURE`, `SOCKET_PROTECTION_FAILED`,
 - TCP/TLS fallback may improve reachability but can worsen latency and jitter. Expose the selected adapter and degraded quality.
 - If all configured endpoints fail, stop at the retry budget and report the observed failure layer. Never invent an alternate endpoint or silently use an unapproved third-party relay.
 
-## 8. Retry, timers, and energy
+## 9. Retry, timers, and energy
 
 - Use one central scheduler for deadlines and retry work; avoid one timer/task per endpoint or packet.
 - Apply bounded exponential backoff with jitter per endpoint/adapter. Set a maximum attempt count or elapsed retry budget.
@@ -198,7 +239,7 @@ Adapter errors use stable categories: `DNS_FAILURE`, `SOCKET_PROTECTION_FAILED`,
 - Do not hold a wake lock for background retry loops. Keep the active tunnel's scheduling separate from deferrable configuration refresh.
 - Every timer must be cancellable on generation change and shutdown.
 
-## 9. Observability and privacy
+## 10. Observability and privacy
 
 Expose a compact diagnostic snapshot:
 - derived user-visible state;
@@ -211,7 +252,7 @@ Expose a compact diagnostic snapshot:
 
 Do not log packet contents, keys, TURN credentials, raw DNS query history, or full user traffic metadata. Diagnostic export must be opt-in, redacted, and bounded. Counters and timestamps should use monotonic sources internally.
 
-## 10. Required tests before implementation
+## 11. Required tests before implementation
 
 1. Deterministic reducer tests for every state/event pair, including stale generations and out-of-order events.
 2. Network transition tests: Wi-Fi to cellular, cellular to Wi-Fi, network loss, captive portal, unvalidated network, and rapid repeated callbacks.
