@@ -736,6 +736,8 @@ pub enum TurnUdpDriverError {
     Queue(DatagramQueueError),
     Socket(DatagramSocketError),
     PartialDatagram { expected: usize, actual: usize },
+    /// The socket or protocol failed; this Allocation driver is no longer usable.
+    Retired,
 }
 
 /// Result of one bounded receive attempt.
@@ -767,6 +769,7 @@ pub struct TurnUdpDriver<
         CONTROL_MAX_BYTES,
         PEER_MAX_BYTES,
     >,
+    retired: bool,
 }
 
 impl<
@@ -798,7 +801,16 @@ impl<
             socket,
             engine,
             queues: TurnUdpSendQueues::new(),
+            retired: false,
         })
+    }
+
+    fn ensure_active(&self) -> Result<(), TurnUdpDriverError> {
+        if self.retired {
+            Err(TurnUdpDriverError::Retired)
+        } else {
+            Ok(())
+        }
     }
 
     /// Advances TURN timers and queues at most one pending control datagram.
@@ -806,6 +818,7 @@ impl<
     /// Call this from the shared event loop when the driver's deadline expires
     /// or after relevant socket activity; do not create a task per packet.
     pub fn poll_control(&mut self, now: MonotonicTime) -> Result<bool, TurnUdpDriverError> {
+        self.ensure_active()?;
         // Reserve worst-case queue capacity before advancing protocol state:
         // poll_transmit may consume a pending control transaction.
         self.queues
@@ -833,6 +846,7 @@ impl<
         now: MonotonicTime,
         encoded_buffer: &mut [u8],
     ) -> Result<usize, TurnUdpDriverError> {
+        self.ensure_active()?;
         // Ensure both scratch storage and queue budgets can hold the largest
         // datagram before asking the TURN engine to build/consume this send.
         if encoded_buffer.len() < MAX_DATAGRAM {
@@ -858,6 +872,7 @@ impl<
     /// A fatal socket error or a partial UDP send invalidates this driver;
     /// callers should drop it and establish a fresh Allocation/socket pair.
     pub fn flush_one(&mut self) -> Result<DatagramFlushResult, TurnUdpDriverError> {
+        self.ensure_active()?;
         let socket = &mut self.socket;
         let mut socket_error = None;
         let result =
@@ -873,6 +888,7 @@ impl<
             );
 
         if let Some(error) = socket_error {
+            self.retired = true;
             self.engine.protocol_error();
             return Err(TurnUdpDriverError::Socket(error));
         }
@@ -880,6 +896,7 @@ impl<
             expected, actual, ..
         } = result
         {
+            self.retired = true;
             self.engine.protocol_error();
             return Err(TurnUdpDriverError::PartialDatagram { expected, actual });
         }
@@ -896,17 +913,20 @@ impl<
         buffer: &'a mut [u8],
         now: MonotonicTime,
     ) -> Result<TurnUdpDriverReceive<'a>, TurnUdpDriverError> {
+        self.ensure_active()?;
         let (len, from) = match self.socket.recv_from(buffer) {
             Ok(received) => received,
             Err(DatagramSocketError::WouldBlock) => {
                 return Ok(TurnUdpDriverReceive::WouldBlock);
             }
             Err(error) => {
+                self.retired = true;
                 self.engine.protocol_error();
                 return Err(TurnUdpDriverError::Socket(error));
             }
         };
         if len > buffer.len() {
+            self.retired = true;
             self.engine.protocol_error();
             return Err(TurnUdpDriverError::Turn(TurnError::BufferTooSmall {
                 required: len,
