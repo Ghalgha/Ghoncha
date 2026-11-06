@@ -72,9 +72,16 @@ pub struct PendingDatagram<'a> {
 /// Why a datagram could not be added to a bounded send queue.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DatagramQueueError {
-    DatagramTooLarge { maximum: usize, actual: usize },
+    DatagramTooLarge {
+        maximum: usize,
+        actual: usize,
+    },
     RecordCapacityReached,
-    ByteCapacityReached { maximum: usize, queued: usize, incoming: usize },
+    ByteCapacityReached {
+        maximum: usize,
+        queued: usize,
+        incoming: usize,
+    },
 }
 
 /// Fixed-capacity UDP send queue.
@@ -411,7 +418,9 @@ mod tests {
         let first = [1, 2, 3, 4, 5];
         let second = [9, 8, 7];
         queue.push(destination(), &first).unwrap();
-        queue.push("198.51.100.2:3478".parse().unwrap(), &second).unwrap();
+        queue
+            .push("198.51.100.2:3478".parse().unwrap(), &second)
+            .unwrap();
 
         // Re-reading front models a WouldBlock result: no state is consumed.
         for _ in 0..3 {
