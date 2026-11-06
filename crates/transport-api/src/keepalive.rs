@@ -134,20 +134,20 @@ mod tests {
     #[test]
     fn uses_one_shot_deadline_and_respects_new_activity() {
         let policy =
-            IdleKeepalivePolicy::new(Some(20 * SECOND), 1 * SECOND, 60 * SECOND, 2_000).unwrap();
+            IdleKeepalivePolicy::new(Some(20 * SECOND), SECOND, 60 * SECOND, 2_000).unwrap();
         assert_eq!(
             policy.deadline_after_activity(10 * SECOND),
             Some(26 * SECOND)
         );
         assert!(!policy.is_due(25 * SECOND, 10 * SECOND));
         assert!(policy.is_due(26 * SECOND, 10 * SECOND));
-        assert!(!policy.is_due(26 * SECOND, 21 * SECOND));
+        assert!(!policy.is_due(26 * SECOND, 2SECOND));
     }
 
     #[test]
     fn overflow_does_not_create_an_immediate_deadline() {
         let policy =
-            IdleKeepalivePolicy::new(Some(20 * SECOND), 1 * SECOND, 60 * SECOND, 2_000).unwrap();
+            IdleKeepalivePolicy::new(Some(20 * SECOND), SECOND, 60 * SECOND, 2_000).unwrap();
         assert_eq!(policy.deadline_after_activity(u64::MAX - 1), None);
     }
 
