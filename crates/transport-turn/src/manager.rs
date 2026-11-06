@@ -512,17 +512,38 @@ mod tests {
     fn dispatch_preserves_affinity_and_clears_it_when_allocation_is_retired() {
         let mut manager = TurnAllocationManager::<2>::new();
         manager.insert(7, engine(40007)).unwrap();
-        let first = manager.dispatch_flow(flow_key(), 1).unwrap();
+        let first = manager.dispatch_flow(flow_key(), 1, 2).unwrap();
+        let FlowAdmissionDecision::Dispatched(first) = first else { panic!("flow should be dispatched") };
         assert_eq!(first.kind, DispatchKind::NewFlow);
         assert_eq!(first.worker_id, 7);
-        let second = manager.dispatch_flow(flow_key(), 2).unwrap();
+        let second = manager.dispatch_flow(flow_key(), 2, 2).unwrap();
+        let FlowAdmissionDecision::Dispatched(second) = second else { panic!("existing flow should stay dispatched") };
         assert_eq!(second.kind, DispatchKind::AffinityHit);
         manager.begin_drain(7).unwrap();
         manager.take_drained(7).unwrap();
         manager.insert(7, engine(40008)).unwrap();
-        let after_reuse = manager.dispatch_flow(flow_key(), 3).unwrap();
+        let after_reuse = manager.dispatch_flow(flow_key(), 3, 2).unwrap();
+        let FlowAdmissionDecision::Dispatched(after_reuse) = after_reuse else { panic!("replacement should accept new flow") };
         assert_eq!(after_reuse.kind, DispatchKind::NewFlow);
         assert_eq!(after_reuse.worker_id, 7);
+    }
+
+    #[test]
+    fn new_flow_uses_least_loaded_allocation_and_requests_capacity_at_eighty_percent() {
+        let mut manager = TurnAllocationManager::<3>::new();
+        manager.insert(1, engine(40001)).unwrap();
+        manager.insert(2, engine(40002)).unwrap();
+        manager.update_load(1, AllocationLoad { pressure_ppm: 700_000, ..AllocationLoad::IDLE }).unwrap();
+        manager.update_load(2, AllocationLoad { pressure_ppm: 300_000, ..AllocationLoad::IDLE }).unwrap();
+        let routed = manager.dispatch_flow(flow_key(), 1, 3).unwrap();
+        let FlowAdmissionDecision::Dispatched(routed) = routed else { panic!("least-loaded allocation should be selected") };
+        assert_eq!(routed.worker_id, 2);
+
+        manager.update_load(1, AllocationLoad { pressure_ppm: 800_000, ..AllocationLoad::IDLE }).unwrap();
+        manager.update_load(2, AllocationLoad { pressure_ppm: 800_000, ..AllocationLoad::IDLE }).unwrap();
+        let next = FlowKey { discriminator: FlowDiscriminator::Ports { source: 40001, destination: 443 }, ..flow_key() };
+        assert_eq!(manager.dispatch_flow(next, 2, 3).unwrap(), FlowAdmissionDecision::OpenAllocation);
+        assert_eq!(manager.dispatch_flow(next, 2, 2).unwrap(), FlowAdmissionDecision::Backpressure);
     }
 
     #[test]
