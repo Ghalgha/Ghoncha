@@ -13,6 +13,7 @@ default = []
 std = ["turn-client-proto/std"]
 
 [dependencies]
+ghoncha-flow-dispatch = { path = "../flow-dispatch" }
 ghoncha-transport-api = { path = "../transport-api" }
 turn-client-proto = { version = "=0.7.3", default-features = false }
 
