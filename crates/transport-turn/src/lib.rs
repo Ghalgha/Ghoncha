@@ -1563,3 +1563,231 @@ mod tests {
         ));
     }
 }
+
+
+/// Error returned by the bounded TURN timer scheduler.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnReactorError {
+    CapacityReached,
+    DuplicateAllocation,
+    UnknownAllocation,
+}
+
+/// One scheduled TURN Allocation timer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TurnReactorSlot {
+    allocation_id: u16,
+    deadline: Option<MonotonicTime>,
+}
+
+/// Fixed-capacity, allocation-free timer scheduler for a shared TURN reactor.
+///
+/// The platform reactor remains responsible for OS readiness registration.
+/// It calls `wake` when a socket becomes ready and `schedule` with the
+/// protocol's `WaitUntil` deadline after advancing that Allocation. Due
+/// timers are returned in round-robin order with a caller-supplied scan/output
+/// budget; no worker thread or periodic per-Allocation polling is required.
+pub struct TurnUdpReactor<const CAPACITY: usize> {
+    slots: [Option<TurnReactorSlot>; CAPACITY],
+    cursor: usize,
+    len: usize,
+}
+
+impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
+    pub fn new() -> Self {
+        Self {
+            slots: [None; CAPACITY],
+            cursor: 0,
+            len: 0,
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub const fn capacity(&self) -> usize {
+        CAPACITY
+    }
+
+    /// Registers an Allocation without scheduling an unsolicited timer.
+    pub fn register(&mut self, allocation_id: u16) -> Result<(), TurnReactorError> {
+        if self.slots.iter().flatten().any(|slot| slot.allocation_id == allocation_id) {
+            return Err(TurnReactorError::DuplicateAllocation);
+        }
+        let Some(index) = self.slots.iter().position(Option::is_none) else {
+            return Err(TurnReactorError::CapacityReached);
+        };
+        self.slots[index] = Some(TurnReactorSlot {
+            allocation_id,
+            deadline: None,
+        });
+        self.len += 1;
+        Ok(())
+    }
+
+    /// Replaces the next protocol deadline for an Allocation.
+    pub fn schedule(
+        &mut self,
+        allocation_id: u16,
+        deadline: MonotonicTime,
+    ) -> Result<(), TurnReactorError> {
+        let slot = self.find_mut(allocation_id)?;
+        slot.deadline = Some(deadline);
+        Ok(())
+    }
+
+    /// Marks an Allocation immediately due after socket readiness or a
+    /// protocol event. The caller should then poll it and schedule its result.
+    pub fn wake(&mut self, allocation_id: u16) -> Result<(), TurnReactorError> {
+        let slot = self.find_mut(allocation_id)?;
+        slot.deadline = Some(MonotonicTime(0));
+        Ok(())
+    }
+
+    /// Cancels a timer while keeping the Allocation registered.
+    pub fn cancel_timer(&mut self, allocation_id: u16) -> Result<(), TurnReactorError> {
+        let slot = self.find_mut(allocation_id)?;
+        slot.deadline = None;
+        Ok(())
+    }
+
+    /// Removes an Allocation and its timer.
+    pub fn unregister(&mut self, allocation_id: u16) -> Result<(), TurnReactorError> {
+        let Some(index) = self.slots.iter().position(|entry| {
+            entry.is_some_and(|slot| slot.allocation_id == allocation_id)
+        }) else {
+            return Err(TurnReactorError::UnknownAllocation);
+        };
+        self.slots[index] = None;
+        self.len -= 1;
+        if CAPACITY != 0 {
+            self.cursor %= CAPACITY;
+        }
+        Ok(())
+    }
+
+    /// Returns the earliest absolute monotonic deadline, if any.
+    pub fn next_deadline(&self) -> Option<MonotonicTime> {
+        self.slots
+            .iter()
+            .flatten()
+            .filter_map(|slot| slot.deadline)
+            .min()
+    }
+
+    /// Writes due Allocation IDs into caller storage.
+    ///
+    /// At most `min(max_scan, CAPACITY, output.len())` slots are inspected.
+    /// Returned timers are cleared and must be rescheduled after protocol poll.
+    /// The cursor advances after every inspected slot to prevent starvation.
+    pub fn take_due(
+        &mut self,
+        now: MonotonicTime,
+        output: &mut [u16],
+        max_scan: usize,
+    ) -> usize {
+        if CAPACITY == 0 || output.is_empty() || self.len == 0 {
+            return 0;
+        }
+        let scan_limit = max_scan.min(CAPACITY);
+        let mut scanned = 0;
+        let mut written = 0;
+        while scanned < scan_limit && written < output.len() {
+            let index = self.cursor;
+            self.cursor = (self.cursor + 1) % CAPACITY;
+            scanned += 1;
+            if let Some(slot) = self.slots[index].as_mut() {
+                if slot.deadline.is_some_and(|deadline| deadline <= now) {
+                    output[written] = slot.allocation_id;
+                    written += 1;
+                    slot.deadline = None;
+                }
+            }
+        }
+        written
+    }
+
+    fn find_mut(
+        &mut self,
+        allocation_id: u16,
+    ) -> Result<&mut TurnReactorSlot, TurnReactorError> {
+        self.slots
+            .iter_mut()
+            .flatten()
+            .find(|slot| slot.allocation_id == allocation_id)
+            .ok_or(TurnReactorError::UnknownAllocation)
+    }
+}
+
+impl<const CAPACITY: usize> Default for TurnUdpReactor<CAPACITY> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod reactor_tests {
+    use super::*;
+
+    #[test]
+    fn reactor_returns_only_due_deadlines_and_clears_them() {
+        let mut reactor = TurnUdpReactor::<3>::new();
+        reactor.register(10).unwrap();
+        reactor.register(20).unwrap();
+        reactor.schedule(10, MonotonicTime(100)).unwrap();
+        reactor.schedule(20, MonotonicTime(200)).unwrap();
+        assert_eq!(reactor.next_deadline(), Some(MonotonicTime(100)));
+
+        let mut due = [0; 3];
+        assert_eq!(reactor.take_due(MonotonicTime(150), &mut due, 3), 1);
+        assert_eq!(due[0], 10);
+        assert_eq!(reactor.next_deadline(), Some(MonotonicTime(200)));
+    }
+
+    #[test]
+    fn reactor_bounds_work_and_rotates_scan_cursor() {
+        let mut reactor = TurnUdpReactor::<4>::new();
+        for id in 1..=4 {
+            reactor.register(id).unwrap();
+            reactor.schedule(id, MonotonicTime(1)).unwrap();
+        }
+        let mut due = [0; 2];
+        assert_eq!(reactor.take_due(MonotonicTime(1), &mut due, 2), 2);
+        assert_eq!(reactor.take_due(MonotonicTime(1), &mut due, 2), 2);
+        assert_ne!(due[0], due[1]);
+        assert_eq!(reactor.next_deadline(), None);
+    }
+
+    #[test]
+    fn reactor_rejects_duplicate_and_capacity_overflow() {
+        let mut reactor = TurnUdpReactor::<1>::new();
+        reactor.register(7).unwrap();
+        assert_eq!(
+            reactor.register(7),
+            Err(TurnReactorError::DuplicateAllocation)
+        );
+        assert_eq!(
+            reactor.register(8),
+            Err(TurnReactorError::CapacityReached)
+        );
+    }
+
+    #[test]
+    fn reactor_wake_and_unregister_are_explicit() {
+        let mut reactor = TurnUdpReactor::<2>::new();
+        reactor.register(4).unwrap();
+        reactor.wake(4).unwrap();
+        assert_eq!(reactor.next_deadline(), Some(MonotonicTime(0)));
+        reactor.unregister(4).unwrap();
+        assert_eq!(reactor.next_deadline(), None);
+        assert_eq!(
+            reactor.cancel_timer(4),
+            Err(TurnReactorError::UnknownAllocation)
+        );
+    }
+}
