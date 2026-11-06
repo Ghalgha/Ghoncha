@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use ghoncha_transport_api::MonotonicTime;
 use ghoncha_transport_turn::{
-    DatagramFlushResult, DatagramSocketError, TurnDatagramSocket, TurnRelayFamilies, TurnUdpDriver,
+    DatagramFlushResult, DatagramReceive, DatagramSocketError, TurnDatagramSocket,
+    TurnRelayFamilies, TurnUdpDriver,
     TurnUdpEngine,
 };
 use turn_client_proto::types::Instant;
@@ -283,6 +284,7 @@ struct MockDatagramSocket {
     inbound: VecDeque<(SocketAddr, Vec<u8>)>,
     block_next_send: bool,
     fail_next_send: bool,
+    truncate_next_receive: bool,
 }
 
 impl TurnDatagramSocket for MockDatagramSocket {
@@ -307,15 +309,27 @@ impl TurnDatagramSocket for MockDatagramSocket {
         Ok(datagram.len())
     }
 
-    fn recv_from(&mut self, buffer: &mut [u8]) -> Result<(usize, SocketAddr), DatagramSocketError> {
+    fn recv_from(&mut self, buffer: &mut [u8]) -> Result<DatagramReceive, DatagramSocketError> {
         let Some((from, datagram)) = self.inbound.pop_front() else {
             return Err(DatagramSocketError::WouldBlock);
         };
+        if self.truncate_next_receive {
+            self.truncate_next_receive = false;
+            return Ok(DatagramReceive {
+                len: buffer.len(),
+                from,
+                truncated: true,
+            });
+        }
         if datagram.len() > buffer.len() {
             return Err(DatagramSocketError::Failed);
         }
         buffer[..datagram.len()].copy_from_slice(&datagram);
-        Ok((datagram.len(), from))
+        Ok(DatagramReceive {
+            len: datagram.len(),
+            from,
+            truncated: false,
+        })
     }
 }
 
@@ -329,6 +343,7 @@ fn socket_owning_driver_retains_control_datagram_across_would_block() {
         inbound: VecDeque::new(),
         block_next_send: true,
         fail_next_send: false,
+        truncate_next_receive: false,
     };
 
     let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
@@ -404,6 +419,7 @@ fn socket_driver_retires_after_fatal_send_error() {
         inbound: VecDeque::new(),
         block_next_send: false,
         fail_next_send: true,
+        truncate_next_receive: false,
     };
 
     let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
@@ -440,4 +456,35 @@ fn socket_driver_retires_after_fatal_send_error() {
         ),
         Err(ghoncha_transport_turn::TurnUdpDriverError::Retired)
     ));
+}
+
+
+#[test]
+fn socket_driver_discards_truncated_datagram_without_retiring_allocation() {
+    let client_addr: SocketAddr = "192.0.2.13:40003".parse().unwrap();
+    let server_addr: SocketAddr = "198.51.100.13:3478".parse().unwrap();
+    let socket = MockDatagramSocket {
+        local: client_addr,
+        sent: Vec::new(),
+        inbound: VecDeque::from([(server_addr, vec![0u8; 64])]),
+        block_next_send: false,
+        fail_next_send: false,
+        truncate_next_receive: true,
+    };
+
+    let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
+        socket,
+        server_addr,
+        "ghoncha-test-user",
+        "ghoncha-test-pass",
+    )
+    .unwrap();
+
+    let mut receive_buffer = [0u8; 32];
+    assert!(matches!(
+        driver.receive_one(&mut receive_buffer, MonotonicTime(0)),
+        Ok(ghoncha_transport_turn::TurnUdpDriverReceive::Truncated { from })
+            if from == server_addr
+    ));
+    assert!(driver.poll_control(MonotonicTime(1)).is_ok());
 }
