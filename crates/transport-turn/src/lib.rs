@@ -61,7 +61,7 @@ pub struct OutboundDatagram {
 /// Peer payloads borrow the caller's receive buffer and must be consumed before
 /// that buffer is reused. Non-peer TURN messages are handled by the protocol
 /// state machine and must not be forwarded into the VPN data plane.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum TurnReceiveResult<'a> {
     Handled,
     Ignored {
