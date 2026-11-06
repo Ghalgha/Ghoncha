@@ -223,13 +223,12 @@ pub struct TurnUdpSendQueues<
 }
 
 impl<
-        const CONTROL_CAPACITY: usize,
-        const PEER_CAPACITY: usize,
-        const MAX_DATAGRAM: usize,
-        const CONTROL_MAX_BYTES: usize,
-        const PEER_MAX_BYTES: usize,
-    >
-    TurnUdpSendQueues<
+    const CONTROL_CAPACITY: usize,
+    const PEER_CAPACITY: usize,
+    const MAX_DATAGRAM: usize,
+    const CONTROL_MAX_BYTES: usize,
+    const PEER_MAX_BYTES: usize,
+> TurnUdpSendQueues<
         CONTROL_CAPACITY,
         PEER_CAPACITY,
         MAX_DATAGRAM,
@@ -301,7 +300,7 @@ impl<
         const MAX_DATAGRAM: usize,
         const CONTROL_MAX_BYTES: usize,
         const PEER_MAX_BYTES: usize,
-    > Default
+> Default
     for TurnUdpSendQueues<
         CONTROL_CAPACITY,
         PEER_CAPACITY,
