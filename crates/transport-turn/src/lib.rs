@@ -188,7 +188,7 @@ impl<const CAPACITY: usize, const MAX_DATAGRAM: usize, const MAX_QUEUED_BYTES: u
             bytes,
         });
         self.len += 1;
-        self.queued_bytes = next_bytes;
+        self.queued_bytes = self.queued_bytes.saturating_add(datagram.len());
         Ok(())
     }
 
