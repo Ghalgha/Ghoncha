@@ -20,6 +20,7 @@ pub enum RtpRecordError {
     PaddingNotSupported,
     HeaderExtensionsNotSupported,
     ContributingSourcesNotSupported,
+    MarkerNotSupported,
     UnexpectedPayloadType,
     EmptyPayload,
 }
@@ -27,7 +28,6 @@ pub enum RtpRecordError {
 /// The fixed RTP header fields used by the GHONCHA profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RtpRecordHeader {
-    pub marker: bool,
     pub sequence_number: u16,
     pub timestamp: u32,
     pub ssrc: u32,
@@ -41,7 +41,7 @@ impl RtpRecordHeader {
         }
 
         output[0] = 0x80; // RTP version 2; no padding, extension, or CSRCs.
-        output[1] = (u8::from(self.marker) << 7) | GHONCHA_RTP_PAYLOAD_TYPE;
+        output[1] = GHONCHA_RTP_PAYLOAD_TYPE;
         output[2..4].copy_from_slice(&self.sequence_number.to_be_bytes());
         output[4..8].copy_from_slice(&self.timestamp.to_be_bytes());
         output[8..12].copy_from_slice(&self.ssrc.to_be_bytes());
@@ -81,7 +81,10 @@ impl<'a> RtpRecord<'a> {
         }
 
         let second = datagram[1];
-        if second & 0x7f != GHONCHA_RTP_PAYLOAD_TYPE {
+        if second & 0x80 != 0 {
+            return Err(RtpRecordError::MarkerNotSupported);
+        }
+        if second != GHONCHA_RTP_PAYLOAD_TYPE {
             return Err(RtpRecordError::UnexpectedPayloadType);
         }
 
@@ -92,7 +95,6 @@ impl<'a> RtpRecord<'a> {
 
         Ok(Self {
             header: RtpRecordHeader {
-                marker: second & 0x80 != 0,
                 sequence_number: u16::from_be_bytes([datagram[2], datagram[3]]),
                 timestamp: u32::from_be_bytes([
                     datagram[4],
@@ -119,7 +121,6 @@ mod tests {
     #[test]
     fn writes_and_parses_a_record_without_copying_payload() {
         let header = RtpRecordHeader {
-            marker: true,
             sequence_number: 0x1234,
             timestamp: 0x1020_3040,
             ssrc: 0xa1b2_c3d4,
