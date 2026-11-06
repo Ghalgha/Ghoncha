@@ -147,8 +147,7 @@ mod tests {
     #[test]
     fn overflow_does_not_create_an_immediate_deadline() {
         let policy =
-            IdleKeepalivePolicy::new(Some(20 * SECOND), 1 * SECOND, 60 * SECOND, 2_000)
-                .unwrap();
+            IdleKeepalivePolicy::new(Some(20 * SECOND), 1 * SECOND, 60 * SECOND, 2_000).unwrap();
         assert_eq!(policy.deadline_after_activity(u64::MAX - 1), None);
     }
 
