@@ -33,6 +33,7 @@ pub enum FlowDiscriminator {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FlowKeyError {
     UnsupportedIpv6Extension(u8),
+    InvalidIpv6FragmentHeader,
     TruncatedHeader,
 }
 
@@ -61,8 +62,13 @@ impl FlowKey {
                         return Err(FlowKeyError::TruncatedHeader);
                     }
                     let header = &bytes[payload_offset..payload_offset + 8];
-                    protocol = header[0];
                     let offset_flags = u16::from_be_bytes([header[2], header[3]]);
+                    // RFC 8200 reserves the second octet and bits 1-2 of
+                    // the offset/flags field; non-zero values are malformed.
+                    if header[1] != 0 || offset_flags & 0x0006 != 0 {
+                        return Err(FlowKeyError::InvalidIpv6FragmentHeader);
+                    }
+                    protocol = header[0];
                     let fragment_offset = (offset_flags & 0xfff8) >> 3;
                     if fragment_offset != 0 || offset_flags & 1 != 0 {
                         fragment = Some(u32::from_be_bytes([
@@ -226,6 +232,44 @@ mod tests {
         assert_eq!(
             FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
             Err(FlowKeyError::UnsupportedIpv6Extension(0))
+        );
+    }
+
+    fn ipv6_fragment(reserved: u8, offset_flags: u16, id: u32) -> std::vec::Vec<u8> {
+        let mut bytes = std::vec![0_u8; 48];
+        bytes[0] = 0x60;
+        bytes[4..6].copy_from_slice(&8_u16.to_be_bytes());
+        bytes[6] = 44;
+        bytes[8..24].copy_from_slice(&[1; 16]);
+        bytes[24..40].copy_from_slice(&[2; 16]);
+        bytes[40] = 17;
+        bytes[41] = reserved;
+        bytes[42..44].copy_from_slice(&offset_flags.to_be_bytes());
+        bytes[44..48].copy_from_slice(&id.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn rejects_nonzero_reserved_fields_in_ipv6_fragment_header() {
+        for (reserved, offset_flags) in [(1, 0), (0, 0x0002), (0, 0x0004)] {
+            let bytes = ipv6_fragment(reserved, offset_flags, 7);
+            assert_eq!(
+                FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
+                Err(FlowKeyError::InvalidIpv6FragmentHeader)
+            );
+        }
+    }
+
+    #[test]
+    fn valid_ipv6_fragments_share_the_datagram_key() {
+        let first = ipv6_fragment(0, 0x0001, 0x1234_5678);
+        let later = ipv6_fragment(0, 0x0008, 0x1234_5678);
+        let first_key = FlowKey::from_packet(&IpPacket::parse(&first).unwrap()).unwrap();
+        let later_key = FlowKey::from_packet(&IpPacket::parse(&later).unwrap()).unwrap();
+        assert_eq!(first_key, later_key);
+        assert_eq!(
+            first_key.discriminator,
+            FlowDiscriminator::Fragment(0x1234_5678)
         );
     }
 
