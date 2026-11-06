@@ -1,180 +1,148 @@
-# GHONCHA VK Calls transport
+# GHONCHA VK Calls TURN transport
 
-Status: experimental transport design. VK Calls is a first-class GHONCHA connectivity target, but the public VK API, the public Calls SDK, and any undocumented call-internal signalling are distinct interfaces with different support and compatibility guarantees.
+Status: architecture baseline for an experimental, user-authorized transport. This document supersedes the earlier WebRTC DataChannel framing. The primary mechanism studied in the supplied reference projects is VK Calls TURN relay, not a generic VK Calls DataChannel.
 
-## 1. Why this transport exists
+## 1. Correct transport model
 
-Some access networks may permit VK Calls infrastructure while blocking GHONCHA's ordinary VPN endpoints. GHONCHA may therefore offer a user-authorized VK Calls path between:
-- a GHONCHA client on the restricted network; and
-- a GHONCHA peer/bridge with a usable route to the public internet.
+The reference implementations use VK Calls as a source of TURN relay service and short-lived TURN credentials. They do not generally tunnel IP packets through the public VK Calls JavaScript SDK's DataChannel API.
 
-This is an availability option, not a guarantee. A call may be blocked, rate-limited, unavailable to a particular account, or unusable for data transport. Never assume that VK is allowlisted merely because the app or website opens.
+The conceptual path is:
 
-The VK path is a WebRTC media/data transport adapter. It is not TURN, and VK's SFU is not the GHONCHA VPN gateway. End-to-end GHONCHA encryption must terminate only at the GHONCHA peer/gateway, not at an intermediary bridge that should not read user traffic.
+```text
+Android TUN
+  -> GHONCHA Rust packet engine
+  -> per-session GHONCHA authenticated encryption
+  -> DTLS-protected datagrams
+  -> TURN client (Allocate / Permission / ChannelBind / Refresh)
+  -> VK Calls TURN relay
+  -> GHONCHA server TURN client / relay listener
+  -> DTLS termination and GHONCHA authentication
+  -> VPN gateway / IP forwarding
+```
 
-## 2. Public VK interfaces: documented scope
+The TURN relay forwards packets between the client's allocation and the configured GHONCHA server peer. The relay is not the VPN gateway and must not possess GHONCHA traffic keys. The VPN gateway is the only endpoint that decapsulates user IP traffic and routes/NATs it.
 
-The current public VK Calls SDK documentation is published as `@vkontakte/calls-sdk` (the documentation observed for this design is v2.8.9):
-- SDK overview and quick start: https://st.mycdn.me/static/callssdk/latest/doc/index.html
-- Getting started and lifecycle: https://st.mycdn.me/static/callssdk/2-8-9/doc/guide/usage.html
-- API reference: https://st.mycdn.me/static/callssdk/2-8-9/doc/api/
+A separate TURN-over-TCP/TLS mode carries STUN/TURN framing over a stream. It requires explicit stream framing and bounded queues; TCP head-of-line blocking and retransmission behavior differ from UDP.
 
-The public SDK documents initialization, authorization, call creation/joining, call lifecycle, participant state, device/media handling, local and remote media streams, screen sharing, and network-quality callbacks. It is a browser-oriented JavaScript SDK; the published quick start uses browser media streams.
+## 2. VK Calls credential and call lifecycle
 
-The documented `customData(data, externalId)` method sends a JSON object to a participant (or all participants when no external ID is supplied). Treat it as a bounded signalling/control facility only. It is not a documented arbitrary binary stream, IP tunnel, or replacement for a WebRTC DataChannel.
+The supplied projects demonstrate two broad bootstrap paths:
 
-The documented `publishStream(roomId)` method publishes a call stream. Its public reference does not define a generic byte-stream or raw packet interface.
+1. **User-provided call link/hash:** the user supplies a link/hash for a call they are authorized to use. The client derives or fetches temporary call/TURN access material using the implementation's VK Calls integration.
+2. **User-authorized call creation:** some newer CSQTT branches use VK account authorization and call-management methods to create and later end their own calls. This requires an explicit user login/consent flow and must be kept separate from the data plane.
 
-The public VK API also provides call-management functionality. VK's public announcement describes creating call links, sharing invitations, scheduling/starting/ending conferences, and recording. These methods manage calls; they do not by themselves define a general-purpose packet tunnel.
+Observed code in the supplied repositories uses a mixture of:
+- VK API host/methods and versioned request formats;
+- Calls-specific anonymous bootstrap and preview/token methods;
+- the Calls/OK CDN backend to create/join the call and retrieve `turn_server.username`, `turn_server.credential`, and `turn_server.urls`;
+- call hashes/links and, in some variants, account access tokens.
 
-**Important boundary:** the public documentation reviewed here does not expose a supported generic SCTP DataChannel API through `@vkontakte/calls-sdk`. Do not claim that the public SDK alone provides a stable arbitrary-data tunnel.
+Examples of observed method names in source include `auth.getAnonymToken`, `messages.getCallPreview`, `messages.getAnonymCallToken`, `auth.anonymLogin`, and `vchat.joinConversationByLink`. These are source-observed integration details, not a promise that every method is part of the stable public VK API. The public VK API's documented `calls.start` / `calls.forceFinish` management methods are a different layer from the Calls-specific TURN credential bootstrap.
 
-## 3. WebRTC transport modes to evaluate
+**Documentation boundary:** official VK API documentation is authoritative only for methods it actually documents. Calls-specific endpoints, request signatures, browser/TLS fingerprints, undocumented payloads, and returned TURN fields must be treated as unstable and independently verified. Do not represent private Calls backend methods as a supported public API. Do not hardcode one API version, host, IP range, or client fingerprint as permanent.
 
-Treat the following as separate experimental modes behind one VK adapter.
+If VK requires an interactive security challenge or account verification, pause and ask the user to complete the supported flow. Do not automate or bypass account security, CAPTCHA, rate limits, or anti-abuse controls.
 
-### Mode A: WebRTC DataChannel
+## 3. TURN protocol lifecycle
 
-A WebRTC peer connection negotiates an SCTP DataChannel through the call infrastructure. The DataChannel carries framed GHONCHA tunnel records; it must not carry raw TUN packets directly without bounded framing, authentication, and flow control.
+The client-side TURN adapter must implement and test the actual TURN lifecycle, not just forward arbitrary UDP to a relay address:
 
-Measure:
-- whether the deployed VK call topology actually forwards the negotiated DataChannel between the intended participants;
-- ordered/reliable and unordered/partially-reliable behavior, message-size limits, buffering, and backpressure;
-- SCTP retransmission and head-of-line behavior under loss;
-- DTLS/SCTP setup time, ICE candidate types, relay usage, and reconnection behavior;
-- SFU policy, data-channel limits, and per-account/per-call rate limits.
+- resolve and validate the returned TURN URI list and transport parameters;
+- establish the outer UDP, TCP, or TLS socket on the selected Android Network;
+- protect the socket with `VpnService.protect()` before the first send and bind it to the selected Android Network where required;
+- perform STUN/TURN Allocate with the issued username, credential, and server-provided realm/nonce challenge;
+- retain allocation lifetime and refresh before expiry;
+- create/refresh peer Permission for the GHONCHA server address;
+- ChannelBind and ChannelData where supported, otherwise use Send/Data indications as appropriate;
+- handle 401/438 authentication challenge, nonce rotation, transaction timeout, server errors, allocation expiry, and deallocation;
+- implement bounded retransmission, keepalive, cancellation, and cleanup;
+- never reuse credentials or allocations across a different call/session unless the provider explicitly permits it.
 
-The public Calls SDK reference does not document a generic DataChannel surface. Any integration that depends on call-internal signalling or undocumented peer-connection negotiation is experimental, version-sensitive, and must be isolated from the stable core. Do not scrape or imitate private app sessions as if they were a supported public API.
+The server side receives the DTLS transport from the configured peer and forwards authenticated tunnel datagrams to a loopback or otherwise tightly scoped VPN backend. It must not expose a generic unauthenticated UDP forwarder to the public internet.
 
-### Mode B: Media-track carrier
+TURN allocation, TURN permission, channel binding, DTLS session, GHONCHA peer authentication, and VPN data-plane health are separate states. A successful Allocate does not mean the VPN tunnel is connected.
 
-A second experimental mode may encode bounded tunnel records into a media track and recover them at the other end. A VP8 video-track carrier is one researched design; it is not equivalent to a DataChannel.
+## 4. DTLS and end-to-end security
 
-It must account for:
-- lossy frame delivery, frame drops, reordering, decoder behavior, and bitrate adaptation;
-- encoder CPU, thermal load, radio use, and end-to-end latency;
-- strict pacing and congestion control so tunnel traffic does not overwhelm the call;
-- payload framing, integrity, replay protection, and authenticated session establishment;
-- visible call/media behavior, participant consent, and platform policy.
+The reference projects use DTLS 1.2 between client and server, with TURN carrying the DTLS records. This is distinct from the DTLS/SRTP association between ordinary WebRTC media endpoints.
 
-Do not assume that a video codec is a reliable byte channel. If reliable delivery is required, any retransmission layer must be bounded and congestion-aware. Compare its overhead and latency against DataChannel mode rather than enabling it automatically.
+GHONCHA requirements:
+- use a maintained DTLS implementation and standard cipher suites; do not implement DTLS or cryptographic primitives from scratch;
+- authenticate the GHONCHA server independently, e.g. by a pinned public key/fingerprint or an authenticated handshake bound to the provisioned peer identity;
+- never set certificate verification to insecure/skip-verify in production;
+- use a distinct GHONCHA session key schedule and replay protection; TURN credentials are not tunnel encryption keys;
+- enforce packet and handshake size limits, retransmission/deadline bounds, replay windows, and key rotation;
+- fail closed on peer identity mismatch, malformed records, authentication failure, or replay;
+- fuzz the DTLS integration and all framing/decoding boundaries.
 
-### Mode C: SDK customData
+One reviewed Rust reference configuration sets `insecure_skip_verify = true` for a self-signed certificate. That is a research implementation detail and is **not** an acceptable production security policy for GHONCHA.
 
-Use `customData` only for low-volume control signalling if its documented semantics, size limits, rate limits, and delivery behavior meet requirements. Examples include exchanging a session nonce, protocol version, or a user-approved pairing confirmation. Do not carry user IP packets, bulk data, credentials, or long-lived secrets in this API.
+## 5. Transport modes and performance
 
-## 4. VK call setup and signalling boundary
+Treat these as separate configured modes:
+- TURN over UDP (preferred baseline when reachable);
+- TURN over TCP;
+- TURN over TLS;
+- optional multiple independent TURN allocations/workers, only when measurements justify the extra overhead and provider limits permit it.
 
-Separate call lifecycle from tunnel lifecycle.
+Do not assume more workers increase throughput. They can improve aggregate bandwidth on some paths, but can also increase handshake cost, CPU, radio activity, relay load, congestion, and account/call risk. Begin with one path and benchmark controlled increments.
 
-The call-control component is responsible for:
-- obtaining user-authorized access through a supported VK authentication flow;
-- creating or joining a call using documented VK interfaces where available;
-- handling invitation/link lifecycle and participant admission;
-- reporting call state and platform errors;
-- explicitly ending the call and revoking local resources on disconnect.
+Measure on the same device, gateway, network, payload mix, and call configuration:
+- connection and credential acquisition success/time;
+- per-allocation and aggregate goodput;
+- median/p95/p99 RTT, jitter, loss, reordering, retransmits, and recovery;
+- DTLS CPU, TURN maintenance CPU, allocations, memory, wakeups, radio-active time, temperature, and battery drain;
+- UDP vs TCP vs TLS and worker-count scaling;
+- behavior under call termination, credential expiry, nonce changes, Wi-Fi/cellular handover, Doze, and background restrictions.
 
-The WebRTC component is responsible for:
-- peer-connection construction;
-- ICE configuration and candidate exchange;
-- SDP negotiation;
-- DataChannel or media-track setup;
-- transport statistics and bounded recovery.
+Do not copy published throughput claims or assume a fixed worker count, TURN IP list, port, or MTU is universally optimal.
 
-The GHONCHA tunnel component is responsible for:
-- authenticated peer identity and end-to-end encryption;
-- multiplexing and framing;
-- bounded queues and backpressure;
-- packet/datagram delivery to the Rust tunnel engine;
-- MTU and loss handling.
+## 6. Rust and Android architecture
 
-Never treat a VK account, call link, participant ID, or SFU connection as GHONCHA cryptographic identity. Authenticate the GHONCHA peer independently.
+Recommended GHONCHA ownership:
+- Kotlin Android layer: `VpnService`, user consent/auth UI, call-link/account input, interactive security challenges, `ConnectivityManager`, socket protection/binding, TUN FD creation/ownership.
+- Rust client core: VK credential-provider abstraction, TURN protocol engine, DTLS session, GHONCHA peer authentication, bounded packet pools/queues, worker policy, reconnect state machine, statistics.
+- Rust server: TURN-facing DTLS listener, peer authentication, decapsulation, gateway forwarding, rate/resource limits, observability.
+- FFI: control plane only. No packet-per-call JNI/UniFFI/JNA crossings. Keep packet movement and TURN/DTLS processing inside Rust.
 
-## 5. Undocumented implementation observations
+Credential provider contract:
+- input: explicit user-selected call link/hash or an authorized account session reference;
+- output: short-lived TURN username, credential, realm/nonce if supplied, URI list, expiry/refresh metadata, and redacted provider diagnostics;
+- cancellation and explicit invalidation on logout, call end, or session change;
+- no persistence of raw credentials in logs, crash reports, analytics, or ordinary preferences.
 
-An external open-source project, `kulikov0/whitelist-bypass`, demonstrates a VK Calls WebRTC tunnel architecture and is useful as a research reference:
-- Repository: https://github.com/kulikov0/whitelist-bypass
-- README: https://github.com/kulikov0/whitelist-bypass#readme
-- VK headless implementation: https://github.com/kulikov0/whitelist-bypass/tree/main/headless/vk
+Transport adapter contract:
+- `prepare(network_generation, credentials, peer)`
+- `allocate(deadline)`
+- `create_permission(peer, deadline)`
+- `bind_channel(peer, deadline)`
+- `send_datagram(packet)` with explicit backpressure
+- `receive_datagrams(budget)` with bounded batches
+- `refresh(deadline)`
+- `poll_events(budget)`
+- `close(reason)` idempotently
 
-Its published description distinguishes DataChannel mode from VP8 media-track mode and describes a headless WebRTC/Pion path. Its current VK implementation uses a mixture of VK API calls and call-internal HTTP/WebSocket signalling. Some of those call-internal endpoints and message formats are not documented as public VK API contracts.
+This is a semantic contract, not a commitment to a particular Rust crate, async runtime, or native FFI design.
 
-For architecture review only, the observed private/internal names include `calls.getSettings`, `messages.getCallToken`, `vchat.joinConversationByLink`, and call signalling messages such as `transmit-data`. Their presence in third-party source does not make them supported, stable, or authorized public interfaces. They may change without notice, require application-specific credentials, trigger anti-abuse controls, or stop working. GHONCHA must not hardcode these as a stable public API or make the entire client depend on them.
+## 7. Source projects reviewed
 
-Do not copy implementation code or assets from the reference project without checking its license and notices. The repository currently declares MIT, but attribution and license obligations still apply to any code actually reused. Prefer independent implementations against documented interfaces and standards.
+The reference audit is recorded in `docs/vk-turn-reference-audit.md`. The key starting points are:
+- `cacggghp/vk-turn-proxy`: original Go TURN/DTLS proxy design and basic client/server split;
+- `Urtyom-Alyanov/turn-proxy`: Rust TURN/DTLS implementation, client/server separation, UDP/TCP stream paths;
+- `amurcanov/csqtt`: later Rust client/server implementation with explicit TURN/STUN engine, packet pools, bounded queues, stream transport, worker management, Android VPN integration, and VK credential/call lifecycle;
+- `MYSOREZ/vk-turn-proxy-android`, `amurcanov/proxy-turn-vk-android`, and `SpaceNeuroX/proxy-turn-vk-android`: Android lifecycle/UI and integration examples.
 
-## 6. Security, account, and privacy requirements
+These repositories are implementation references, not production security audits. Check the exact commit and license before considering any code reuse.
 
-- Require explicit user consent before joining, creating, or maintaining a call.
-- Use supported authentication flows. Never ask users to paste passwords, session cookies, or long-lived access tokens into diagnostics or logs.
-- Store any required credentials using platform-backed secure storage; redact them from crash reports and telemetry.
-- Do not log call links, bearer tokens, cookies, SDP, ICE credentials, or participant identifiers unless a user explicitly enables a redacted diagnostic export.
-- Apply independent GHONCHA peer authentication and authenticated encryption before any user traffic enters the VK transport.
-- Enforce message size, queue, rate, retry, and memory limits. Treat all remote signalling and media as untrusted input.
-- Do not use VK's infrastructure to attack, scan, or relay traffic for third parties without authorization. Respect account controls, call participant consent, platform terms, and applicable law.
-- If VK rejects the session, requires an unsupported challenge, or changes its protocol, fail closed and show an accurate diagnostic. Do not bypass CAPTCHA, account security, or anti-abuse protections.
+## 8. Decision gates
 
-## 7. Integration with Network Availability Manager
+Before production integration:
+1. Validate the current VK Calls credential bootstrap with a test account and user-authorized call. Record only non-secret request/response schemas and failure categories.
+2. Separate documented public VK API methods from undocumented Calls backend methods in the provider implementation and documentation.
+3. Implement a standalone TURN/DTLS interoperability test between GHONCHA client and server, without TUN.
+4. Validate peer authentication and replay protection independently of TURN credentials.
+5. Run TURN conformance tests for UDP, TCP, and TLS, including allocation refresh, permission, channel binding, nonce rotation, and cleanup.
+6. Complete security review, fuzzing, Android lifecycle tests, and real-device performance/battery benchmarks.
+7. Only then connect the adapter to the TUN packet engine.
 
-Represent VK as an explicitly provisioned adapter candidate, not as a universal fallback.
-
-Its endpoint state must include:
-- `NotConfigured`
-- `Configured`
-- `CallControlUnavailable`
-- `CallCreatedOrJoined`
-- `PeerConnectionNegotiating`
-- `DataChannelReady`
-- `MediaCarrierReady`
-- `TunnelAuthenticated`
-- `Degraded`
-- `Closed`
-- `Failed`
-
-A VK call being joined does not mean the GHONCHA tunnel is ready. `Connected` is permitted only after GHONCHA peer authentication and successful bidirectional tunnel data-health checks.
-
-On network-generation change, invalidate ICE/network-bound resources and renegotiate under a bounded retry budget. Do not continuously recreate calls or rotate accounts. Keep user disconnect, call termination, and authentication revocation as hard stop conditions.
-
-Expose the active mode (DataChannel or media carrier), call state, peer-authentication state, measured RTT/loss/throughput, last failure category, and retry deadline. Avoid displaying sensitive call identifiers.
-
-## 8. Performance and interoperability test plan
-
-Compare VK DataChannel, VK media-track carrier, direct WireGuard UDP, TURN, and any supported MASQUE adapter using the same gateway, device, payload mix, and network profile.
-
-Measure:
-- setup success rate and time-to-connected;
-- sustained and burst upload/download throughput;
-- median, p95, and p99 RTT, jitter, loss, reordering, and recovery time;
-- CPU, memory, thermal throttling, wakeups, radio-active time, and battery drain on real Android devices;
-- behavior under packet loss, bandwidth changes, background/foreground transitions, sleep/wake, ICE restart, and Wi-Fi/cellular handover;
-- SFU-imposed message/bitrate limits and behavior across multiple accounts, call types, and regions where authorized test access exists.
-
-Do not publish a speed ranking until repeated real-device measurements exist. Do not assume video mode is more reliable merely because media packets pass through an SFU.
-
-## 9. Rust WebRTC implementation candidates
-
-The VK adapter should remain in the Rust Core. Do not introduce a Go runtime or a second VPN packet engine solely because an external reference project uses Pion.
-
-Evaluate two maintained Rust WebRTC candidates for the standalone VK prototype:
-
-- **webrtc-rs `webrtc` (docs observed at v0.21.1):** async-friendly and runtime-agnostic, built over a Sans-I/O `rtc` core. Its documented API includes peer connections, ICE/DTLS/SCTP, DataChannels, media tracks, and send-buffer backpressure. It is the preferred first interoperability prototype because its PeerConnection/DataChannel API is close to the WebRTC programming model used by VK's browser SDK and Pion. Test Android NDK cross-compilation, TLS/crypto provider compatibility, runtime footprint, event scheduling, and shutdown behavior before adoption.
-  - https://docs.rs/webrtc/latest/webrtc/
-  - https://github.com/webrtc-rs/webrtc
-
-- **str0m (docs observed at v0.25.0):** Sans-I/O WebRTC with no internal threads or async tasks; it supports DataChannels, ICE, DTLS, SCTP, and TURN integration. Its explicit poll/drain loop may provide tighter control over allocations, scheduling, and Android wakeups. Its API is intentionally not the browser `RTCPeerConnection` model, and its own documentation notes that its P2P use case has received less testing than its SFU use case. Evaluate it as a performance/control alternative, not as an assumed drop-in replacement.
-  - https://docs.rs/str0m/latest/str0m/
-  - https://github.com/algesten/str0m
-
-Prototype both against the same VK call topology and test cases. Compare successful negotiation, DataChannel interoperability, media-track publishing/receiving, ICE restart, TURN candidate handling, Android cross-build, binary size, peak and steady-state memory, CPU, allocations, throughput, p95/p99 latency, battery, and recovery. Select only after the actual VK path works end-to-end. No crate version is pinned by this design document.
-
-## 10. Decision gates
-
-Before production use:
-1. Verify current VK public API and SDK documentation and supported authentication requirements.
-2. Establish whether the desired DataChannel or media-track integration is available through a documented and permitted interface. If not, keep it explicitly experimental.
-3. Verify platform terms, account requirements, call participant consent, and operational limits.
-4. Build a standalone interoperability prototype before connecting it to the VPN TUN path.
-5. Complete threat modelling, fuzzing, resource-exhaustion tests, and real Android performance/battery benchmarks.
-6. Provide a non-VK transport fallback and a clear failure state when VK is unavailable.
-
-No VK transport implementation or undocumented VK endpoint dependency is added by this document.
+No VK account credential, TURN endpoint, undocumented request signature, or production dependency is embedded by this document.
