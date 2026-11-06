@@ -43,7 +43,18 @@ Examples of observed method names in source include `auth.getAnonymToken`, `mess
 
 If VK requires an interactive security challenge or account verification, pause and ask the user to complete the supported flow. Do not automate or bypass account security, CAPTCHA, rate limits, or anti-abuse controls.
 
-## 3. TURN protocol lifecycle
+## 3. VK API documentation map
+
+Use these sources in this order when maintaining the credential provider:
+
+- **Official VK API reference:** https://dev.vk.com/ru/reference — method contracts, authorization, access scopes, API versioning, errors, and rate limits.
+- **Calls management methods:** https://dev.vk.com/method/calls.start and https://dev.vk.com/method/calls.forceFinish — verify current availability, parameters, permissions, and response schemas directly against the live official reference before implementation.
+- **VK Android SDK:** https://github.com/VKCOM/vk-android-sdk — supported Android authorization and API client patterns; prefer the supported SDK for documented account API operations where practical.
+- **VK Calls JavaScript SDK:** https://st.mycdn.me/static/callssdk/latest/doc/index.html — call/media integration SDK. It is not the TURN credential provider and does not define the TURN protocol used by the reference VPN projects.
+
+Maintain a small provider compatibility record containing the date checked, API version, method, authorization type, required scopes, documented/undocumented status, response schema version, and last successful integration test. Do not infer that a Calls-specific backend endpoint is public just because it appears under a VK-owned domain or is called by a first-party client.
+
+## 4. TURN protocol lifecycle
 
 The client-side TURN adapter must implement and test the actual TURN lifecycle, not just forward arbitrary UDP to a relay address:
 
@@ -62,7 +73,7 @@ The server side receives the DTLS transport from the configured peer and forward
 
 TURN allocation, TURN permission, channel binding, DTLS session, GHONCHA peer authentication, and VPN data-plane health are separate states. A successful Allocate does not mean the VPN tunnel is connected.
 
-## 4. DTLS and end-to-end security
+## 5. DTLS and end-to-end security
 
 The reference projects use DTLS 1.2 between client and server, with TURN carrying the DTLS records. This is distinct from the DTLS/SRTP association between ordinary WebRTC media endpoints.
 
@@ -77,7 +88,7 @@ GHONCHA requirements:
 
 One reviewed Rust reference configuration sets `insecure_skip_verify = true` for a self-signed certificate. That is a research implementation detail and is **not** an acceptable production security policy for GHONCHA.
 
-## 5. Transport modes and performance
+## 6. Transport modes and performance
 
 Treat these as separate configured modes:
 - TURN over UDP (preferred baseline when reachable);
@@ -97,7 +108,7 @@ Measure on the same device, gateway, network, payload mix, and call configuratio
 
 Do not copy published throughput claims or assume a fixed worker count, TURN IP list, port, or MTU is universally optimal.
 
-## 6. Rust and Android architecture
+## 7. Rust and Android architecture
 
 Recommended GHONCHA ownership:
 - Kotlin Android layer: `VpnService`, user consent/auth UI, call-link/account input, interactive security challenges, `ConnectivityManager`, socket protection/binding, TUN FD creation/ownership.
@@ -124,7 +135,7 @@ Transport adapter contract:
 
 This is a semantic contract, not a commitment to a particular Rust crate, async runtime, or native FFI design.
 
-## 7. Source projects reviewed
+## 8. Source projects reviewed
 
 The reference audit is recorded in `docs/vk-turn-reference-audit.md`. The key starting points are:
 - `cacggghp/vk-turn-proxy`: original Go TURN/DTLS proxy design and basic client/server split;
@@ -134,7 +145,7 @@ The reference audit is recorded in `docs/vk-turn-reference-audit.md`. The key st
 
 These repositories are implementation references, not production security audits. Check the exact commit and license before considering any code reuse.
 
-## 8. Decision gates
+## 9. Decision gates
 
 Before production integration:
 1. Validate the current VK Calls credential bootstrap with a test account and user-authorized call. Record only non-secret request/response schemas and failure categories.
