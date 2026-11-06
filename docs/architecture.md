@@ -67,6 +67,8 @@ Do not confuse the DTLS-SRTP association between GHONCHA client and gateway with
 
 The packet engine exchanges opaque, authenticated WireGuard datagrams with a transport adapter. It does not know about VK API calls, TURN credentials, RTP headers, SRTP sequence numbers, TLS proxies, or MASQUE framing.
 
+The generic TURN-over-UDP protocol engine is implemented in `crates/transport-turn` as a `no_std`, Sans-I/O layer. It owns no socket or runtime, exposes caller-driven timers and events, and supports caller-owned transmit buffers. It is not yet the VK adapter: VK credential acquisition, DTLS-SRTP, SRTP protection, gateway integration, and Android socket binding/protection remain separate implementation steps. The upstream TURN credential type currently lacks memory zeroization, so this engine is not production-approved until that is addressed.
+
 The VK adapter internally composes:
 - a VK Calls credential provider;
 - a TURN client;
