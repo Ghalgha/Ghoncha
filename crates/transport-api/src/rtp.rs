@@ -50,6 +50,44 @@ impl RtpRecordHeader {
     }
 }
 
+/// Per-direction RTP sequence state for one SSRC.
+///
+/// The caller must provide a cryptographically random initial sequence number
+/// and SSRC. SRTP remains responsible for rollover-counter and replay state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RtpSendState {
+    next_sequence_number: u16,
+    ssrc: u32,
+}
+
+impl RtpSendState {
+    pub const fn new(initial_sequence_number: u16, ssrc: u32) -> Self {
+        Self {
+            next_sequence_number: initial_sequence_number,
+            ssrc,
+        }
+    }
+
+    /// Returns the next header and advances the 16-bit sequence number.
+    pub fn next_header(&mut self, timestamp: u32) -> RtpRecordHeader {
+        let sequence_number = self.next_sequence_number;
+        self.next_sequence_number = self.next_sequence_number.wrapping_add(1);
+
+        RtpRecordHeader {
+            sequence_number,
+            timestamp,
+            ssrc: self.ssrc,
+        }
+    }
+}
+
+/// Converts elapsed monotonic nanoseconds to the profile's 90 kHz RTP clock.
+///
+/// The result intentionally wraps at 32 bits, as RTP timestamps do.
+pub const fn timestamp_90khz(elapsed_nanoseconds: u64) -> u32 {
+    ((elapsed_nanoseconds as u128 * 90_000) / 1_000_000_000) as u32
+}
+
 /// A parsed GHONCHA RTP record borrowing its payload from the input datagram.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RtpRecord<'a> {
@@ -187,6 +225,26 @@ mod tests {
             RtpRecord::parse(&datagram[..RTP_HEADER_LEN]),
             Err(RtpRecordError::EmptyPayload)
         );
+    }
+
+    #[test]
+    fn sequence_state_wraps_without_changing_ssrc() {
+        let mut state = RtpSendState::new(u16::MAX, 0xa1b2_c3d4);
+
+        let last = state.next_header(10);
+        let wrapped = state.next_header(20);
+
+        assert_eq!(last.sequence_number, u16::MAX);
+        assert_eq!(wrapped.sequence_number, 0);
+        assert_eq!(last.ssrc, 0xa1b2_c3d4);
+        assert_eq!(wrapped.ssrc, 0xa1b2_c3d4);
+    }
+
+    #[test]
+    fn timestamp_uses_a_90khz_clock() {
+        assert_eq!(timestamp_90khz(0), 0);
+        assert_eq!(timestamp_90khz(1_000_000_000), 90_000);
+        assert_eq!(timestamp_90khz(2_000_000_000), 180_000);
     }
 
     #[test]
