@@ -15,7 +15,7 @@ use turn_client_proto::api::{TurnClientApi, TurnConfig};
 use turn_client_proto::prelude::DelayedTransmitBuild;
 use turn_client_proto::stun::agent::Transmit;
 use turn_client_proto::stun::types::data::Data;
-use turn_client_proto::types::stun::message::IntegrityAlgorithm;
+use turn_client_proto::stun::types::message::IntegrityAlgorithm;
 use turn_client_proto::types::{AddressFamily, Instant, TransportType, TurnCredentials};
 use turn_client_proto::udp::{
     BindChannelError, CreatePermissionError, DeleteError, SendError, TurnClientUdp, TurnEvent,
