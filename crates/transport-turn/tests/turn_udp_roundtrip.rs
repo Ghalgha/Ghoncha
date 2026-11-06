@@ -1,8 +1,12 @@
 use core::net::SocketAddr;
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use ghoncha_transport_api::MonotonicTime;
-use ghoncha_transport_turn::{TurnRelayFamilies, TurnUdpEngine};
+use ghoncha_transport_turn::{
+    DatagramFlushResult, DatagramSocketError, DatagramSendAttempt, TurnDatagramSocket,
+    TurnRelayFamilies, TurnUdpDriver, TurnUdpEngine,
+};
 use turn_client_proto::types::Instant;
 use turn_client_proto::udp::{TurnEvent, TurnPollRet, TurnRecvRet};
 use turn_server_proto::api::{TurnServerApi, TurnServerPollRet};
@@ -271,4 +275,91 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
         }
         _ => panic!("expected TURN peer data"),
     }
+}
+
+
+struct MockDatagramSocket {
+    local: SocketAddr,
+    sent: Vec<(SocketAddr, Vec<u8>)>,
+    inbound: VecDeque<(SocketAddr, Vec<u8>)>,
+    block_next_send: bool,
+}
+
+impl TurnDatagramSocket for MockDatagramSocket {
+    fn local_addr(&self) -> SocketAddr {
+        self.local
+    }
+
+    fn send_to(
+        &mut self,
+        destination: SocketAddr,
+        datagram: &[u8],
+    ) -> Result<usize, DatagramSocketError> {
+        if self.block_next_send {
+            self.block_next_send = false;
+            return Err(DatagramSocketError::WouldBlock);
+        }
+        self.sent.push((destination, datagram.to_vec()));
+        Ok(datagram.len())
+    }
+
+    fn recv_from(
+        &mut self,
+        buffer: &mut [u8],
+    ) -> Result<(usize, SocketAddr), DatagramSocketError> {
+        let Some((from, datagram)) = self.inbound.pop_front() else {
+            return Err(DatagramSocketError::WouldBlock);
+        };
+        if datagram.len() > buffer.len() {
+            return Err(DatagramSocketError::Failed);
+        }
+        buffer[..datagram.len()].copy_from_slice(&datagram);
+        Ok((datagram.len(), from))
+    }
+}
+
+#[test]
+fn socket_owning_driver_retains_control_datagram_across_would_block() {
+    let client_addr: SocketAddr = "192.0.2.10:40000".parse().unwrap();
+    let server_addr: SocketAddr = "198.51.100.10:3478".parse().unwrap();
+    let socket = MockDatagramSocket {
+        local: client_addr,
+        sent: Vec::new(),
+        inbound: VecDeque::new(),
+        block_next_send: true,
+    };
+
+    let mut driver = TurnUdpDriver::new(
+        socket,
+        server_addr,
+        "ghoncha-test-user",
+        "ghoncha-test-pass",
+    )
+    .unwrap();
+
+    assert!(driver.poll_control(MonotonicTime(0)).unwrap());
+    assert_eq!(driver.queued_control(), 1);
+
+    assert!(matches!(
+        driver.flush_one().unwrap(),
+        DatagramFlushResult::WouldBlock {
+            class: ghoncha_transport_turn::DatagramClass::Control
+        }
+    ));
+    assert_eq!(driver.queued_control(), 1);
+
+    let sent = driver.flush_one().unwrap();
+    assert!(matches!(
+        sent,
+        DatagramFlushResult::Sent {
+            class: ghoncha_transport_turn::DatagramClass::Control,
+            bytes
+        } if bytes > 0
+    ));
+    assert_eq!(driver.queued_control(), 0);
+
+    let (socket, _engine) = driver.into_parts();
+    assert_eq!(socket.sent.len(), 1);
+    assert_eq!(socket.sent[0].0, server_addr);
+    assert!(!socket.sent[0].1.is_empty());
 }
