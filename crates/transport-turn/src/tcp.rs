@@ -249,7 +249,7 @@ impl TurnTcpEngine {
         let transmit = build.write_into(&mut output[..required]);
         Ok(OutboundDatagram {
             destination: self.server_addr,
-            len: transmit,
+            len: transmit.data.len(),
         })
     }
 
