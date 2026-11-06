@@ -125,8 +125,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
             }
 
             let Some(worker_id) = choose_worker(key, workers) else {
-                self.metrics.no_eligible_worker =
-                    self.metrics.no_eligible_worker.saturating_add(1);
+                self.metrics.no_eligible_worker = self.metrics.no_eligible_worker.saturating_add(1);
                 return Err(DispatchError::NoEligibleWorkers);
             };
             entry.worker_id = worker_id;
@@ -144,8 +143,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
             return Err(DispatchError::FlowTableFull);
         };
         let Some(worker_id) = choose_worker(key, workers) else {
-            self.metrics.no_eligible_worker =
-                self.metrics.no_eligible_worker.saturating_add(1);
+            self.metrics.no_eligible_worker = self.metrics.no_eligible_worker.saturating_add(1);
             return Err(DispatchError::NoEligibleWorkers);
         };
 
@@ -175,19 +173,14 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
             let index = self.expiry_cursor;
             self.expiry_cursor = (self.expiry_cursor + 1) % CAPACITY;
             if let Some(entry) = self.entries[index] {
-                if now_ns >= entry.last_seen_ns
-                    && now_ns - entry.last_seen_ns >= idle_timeout_ns
-                {
+                if now_ns >= entry.last_seen_ns && now_ns - entry.last_seen_ns >= idle_timeout_ns {
                     self.entries[index] = None;
                     expired += 1;
                 }
             }
         }
 
-        self.metrics.expired_entries = self
-            .metrics
-            .expired_entries
-            .saturating_add(expired as u64);
+        self.metrics.expired_entries = self.metrics.expired_entries.saturating_add(expired as u64);
         expired
     }
 
@@ -220,7 +213,9 @@ impl<const CAPACITY: usize> Default for FlowDispatcher<CAPACITY> {
 }
 
 fn worker_is_eligible(workers: &[Worker], id: u16) -> bool {
-    workers.iter().any(|worker| worker.id == id && worker.eligible)
+    workers
+        .iter()
+        .any(|worker| worker.id == id && worker.eligible)
 }
 
 fn choose_worker(key: FlowKey, workers: &[Worker]) -> Option<u16> {
@@ -229,9 +224,9 @@ fn choose_worker(key: FlowKey, workers: &[Worker]) -> Option<u16> {
 
     for worker in workers.iter().filter(|worker| worker.eligible) {
         let score = rendezvous_score(flow_hash, worker.id);
-        if selected.is_none_or(|(best, best_id)| {
-            score > best || (score == best && worker.id < best_id)
-        }) {
+        if selected
+            .is_none_or(|(best, best_id)| score > best || (score == best && worker.id < best_id))
+        {
             selected = Some((score, worker.id));
         }
     }
@@ -264,9 +259,18 @@ mod tests {
     }
 
     const WORKERS: [Worker; 3] = [
-        Worker { id: 10, eligible: true },
-        Worker { id: 20, eligible: true },
-        Worker { id: 30, eligible: true },
+        Worker {
+            id: 10,
+            eligible: true,
+        },
+        Worker {
+            id: 20,
+            eligible: true,
+        },
+        Worker {
+            id: 30,
+            eligible: true,
+        },
     ];
 
     #[test]
@@ -285,7 +289,9 @@ mod tests {
         let mut dispatcher = FlowDispatcher::<64>::new();
         let mut selected = [false; 3];
         for port in 1..=48 {
-            let decision = dispatcher.dispatch(key(port), u64::from(port), &WORKERS).unwrap();
+            let decision = dispatcher
+                .dispatch(key(port), u64::from(port), &WORKERS)
+                .unwrap();
             let index = match decision.worker_id {
                 10 => 0,
                 20 => 1,
@@ -302,7 +308,10 @@ mod tests {
         let mut dispatcher = FlowDispatcher::<8>::new();
         let first = dispatcher.dispatch(key(53), 10, &WORKERS).unwrap();
         let reduced = [
-            Worker { id: 10, eligible: false },
+            Worker {
+                id: 10,
+                eligible: false,
+            },
             WORKERS[1],
             WORKERS[2],
         ];
@@ -316,7 +325,10 @@ mod tests {
     fn table_is_bounded_until_expiry_runs() {
         let mut dispatcher = FlowDispatcher::<1>::new();
         dispatcher.dispatch(key(1), 1, &WORKERS).unwrap();
-        assert_eq!(dispatcher.dispatch(key(2), 2, &WORKERS), Err(DispatchError::FlowTableFull));
+        assert_eq!(
+            dispatcher.dispatch(key(2), 2, &WORKERS),
+            Err(DispatchError::FlowTableFull)
+        );
         assert_eq!(dispatcher.expire_idle(100, 10, 1), 1);
         assert!(dispatcher.dispatch(key(2), 101, &WORKERS).is_ok());
     }
@@ -324,7 +336,10 @@ mod tests {
     #[test]
     fn no_eligible_worker_is_reported() {
         let mut dispatcher = FlowDispatcher::<2>::new();
-        let workers = [Worker { id: 1, eligible: false }];
+        let workers = [Worker {
+            id: 1,
+            eligible: false,
+        }];
         assert_eq!(
             dispatcher.dispatch(key(1), 0, &workers),
             Err(DispatchError::NoEligibleWorkers)
