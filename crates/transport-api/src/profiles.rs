@@ -142,11 +142,11 @@ impl FlowPlan {
 
     /// Returns the next one-flow increase, bounded by the resolved plan.
     ///
-    /// The caller must first establish that more capacity is needed and that
-    /// adding a flow is beneficial. This method deliberately makes no network
-    /// or performance assumptions.
+    /// This also supports ramping up from a lower previous profile, such as
+    /// one flow in EnergySaving to the Standard minimum. The caller must first
+    /// establish that more capacity is needed and that adding a flow is useful.
     pub const fn next_increase(self, current_flows: u16) -> Option<u16> {
-        if current_flows < self.minimum_flows || current_flows >= self.maximum_flows {
+        if current_flows == 0 || current_flows >= self.maximum_flows {
             return None;
         }
         Some(current_flows + 1)
@@ -154,10 +154,10 @@ impl FlowPlan {
 
     /// Returns the next one-flow decrease, bounded by the resolved plan.
     ///
-    /// The caller must ensure that draining the flow will not interrupt
-    /// in-flight records or violate transport lifecycle requirements.
+    /// This also supports draining down from a higher previous profile, such
+    /// as Unlimited to Standard. The caller must preserve in-flight records.
     pub const fn next_decrease(self, current_flows: u16) -> Option<u16> {
-        if current_flows <= self.minimum_flows || current_flows > self.maximum_flows {
+        if current_flows <= self.minimum_flows {
             return None;
         }
         Some(current_flows - 1)
@@ -238,11 +238,12 @@ mod tests {
     fn flow_adjustments_are_bounded_and_incremental() {
         let plan = ConnectionProfile::Standard.resolve(LIVE).unwrap();
 
+        assert_eq!(plan.next_increase(1), Some(2));
         assert_eq!(plan.next_increase(34), Some(35));
         assert_eq!(plan.next_increase(40), None);
+        assert_eq!(plan.next_decrease(41), Some(40));
         assert_eq!(plan.next_decrease(31), Some(30));
         assert_eq!(plan.next_decrease(30), None);
-        assert_eq!(plan.next_decrease(41), None);
     }
 
     #[test]
