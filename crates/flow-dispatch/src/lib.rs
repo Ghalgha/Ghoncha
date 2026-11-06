@@ -161,6 +161,32 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
         })
     }
 
+    /// Returns an existing healthy flow assignment without changing affinity.
+    pub fn lookup_existing(
+        &mut self,
+        key: FlowKey,
+        now_ns: u64,
+        workers: &[Worker],
+    ) -> Option<DispatchDecision> {
+        if CAPACITY == 0 { return None; }
+        let start = (key.stable_hash() as usize) % CAPACITY;
+        for offset in 0..CAPACITY {
+            let index = (start + offset) % CAPACITY;
+            if let Some(mut entry) = self.entries[index]
+                && entry.key == key
+            {
+                if !worker_is_eligible(workers, entry.worker_id) { return None; }
+                entry.last_seen_ns = entry.last_seen_ns.max(now_ns);
+                self.entries[index] = Some(entry);
+                self.metrics.lookups = self.metrics.lookups.saturating_add(1);
+                self.metrics.affinity_hits = self.metrics.affinity_hits.saturating_add(1);
+                return Some(DispatchDecision { worker_id: entry.worker_id, kind: DispatchKind::AffinityHit });
+            }
+            if self.entries[index].is_none() { break; }
+        }
+        None
+    }
+
     /// Assigns a new flow to a caller-selected eligible worker while keeping
     /// existing affinity sticky. The caller is responsible for load-aware
     /// admission and must select only an eligible worker.
