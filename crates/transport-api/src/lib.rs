@@ -211,6 +211,71 @@ pub enum TransportError {
     IoFailure,
 }
 
+/// Stop condition for a bounded batch send.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BatchSendStop {
+    Complete,
+    Backpressure,
+    Failed(TransportError),
+}
+
+/// Outcome of sending a prefix of a record batch.
+///
+/// `accepted` is valid even when `stop` is Backpressure or Failed; callers
+/// must not retry records in the accepted prefix.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchSendOutcome {
+    pub accepted: usize,
+    pub stop: BatchSendStop,
+}
+
+/// Caller-owned storage for one received record in a batch.
+pub struct RecordBuffer<'a> {
+    bytes: &'a mut [u8],
+    len: usize,
+}
+
+impl<'a> RecordBuffer<'a> {
+    pub const fn new(bytes: &'a mut [u8]) -> Self {
+        Self { bytes, len: 0 }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+
+    pub const fn capacity(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+/// Stop condition for a bounded batch receive.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BatchReceiveStop {
+    Complete,
+    WouldBlock,
+    BufferTooSmall { required: usize },
+    Failed(TransportError),
+}
+
+/// Outcome of receiving a prefix of records into caller-owned buffers.
+///
+/// The first `received` buffers contain complete records. On BufferTooSmall,
+/// the next record remains queued and its required size is reported.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchReceiveOutcome {
+    pub received: usize,
+    pub stop: BatchReceiveStop,
+}
+
 /// Runtime-neutral contract for an adapter that transports opaque GHONCHA records.
 ///
 /// Implementations must preserve record boundaries, enforce configured size
@@ -244,10 +309,86 @@ pub trait RecordTransport {
     /// Enqueues one complete record or reports backpressure.
     fn send_record(&mut self, record: &[u8]) -> Result<SendOutcome, TransportError>;
 
+    /// Enqueues as many complete records as possible without blocking.
+    ///
+    /// The default implementation preserves partial-acceptance information.
+    /// Adapters may override it to batch framing, queue operations, or syscalls.
+    fn send_records(&mut self, records: &[&[u8]]) -> BatchSendOutcome {
+        let mut accepted = 0;
+        for record in records {
+            match self.send_record(record) {
+                Ok(SendOutcome::Accepted) => accepted += 1,
+                Ok(SendOutcome::Backpressure) => {
+                    return BatchSendOutcome {
+                        accepted,
+                        stop: BatchSendStop::Backpressure,
+                    };
+                }
+                Err(error) => {
+                    return BatchSendOutcome {
+                        accepted,
+                        stop: BatchSendStop::Failed(error),
+                    };
+                }
+            }
+        }
+        BatchSendOutcome {
+            accepted,
+            stop: BatchSendStop::Complete,
+        }
+    }
+
     /// Receives one complete record without allocating.
     ///
     /// BufferTooSmall must not consume or truncate the queued record.
     fn receive_record(&mut self, output: &mut [u8]) -> Result<ReceiveOutcome, TransportError>;
+
+    /// Receives a bounded batch into caller-owned buffers without allocating.
+    ///
+    /// Each completed record is written to the corresponding buffer and its
+    /// length is available through RecordBuffer::len/as_slice. On any stop
+    /// condition, already received records remain valid and the next record
+    /// is not consumed unless it fits in its destination buffer.
+    fn receive_records(&mut self, output: &mut [RecordBuffer<'_>]) -> BatchReceiveOutcome {
+        let mut received = 0;
+        for slot in output.iter_mut() {
+            slot.len = 0;
+            match self.receive_record(slot.bytes) {
+                Ok(ReceiveOutcome::Record { len }) if len <= slot.bytes.len() => {
+                    slot.len = len;
+                    received += 1;
+                }
+                Ok(ReceiveOutcome::Record { .. }) => {
+                    return BatchReceiveOutcome {
+                        received,
+                        stop: BatchReceiveStop::Failed(TransportError::ProtocolViolation),
+                    };
+                }
+                Ok(ReceiveOutcome::WouldBlock) => {
+                    return BatchReceiveOutcome {
+                        received,
+                        stop: BatchReceiveStop::WouldBlock,
+                    };
+                }
+                Ok(ReceiveOutcome::BufferTooSmall { required }) => {
+                    return BatchReceiveOutcome {
+                        received,
+                        stop: BatchReceiveStop::BufferTooSmall { required },
+                    };
+                }
+                Err(error) => {
+                    return BatchReceiveOutcome {
+                        received,
+                        stop: BatchReceiveStop::Failed(error),
+                    };
+                }
+            }
+        }
+        BatchReceiveOutcome {
+            received,
+            stop: BatchReceiveStop::Complete,
+        }
+    }
 
     /// Stops the adapter and releases sockets/allocations. Must be idempotent.
     fn close(&mut self, reason: CloseReason);
@@ -447,6 +588,51 @@ mod tests {
         transport.close(CloseReason::UserRequest);
         transport.close(CloseReason::InternalFailure);
         assert_eq!(transport.state(), TransportState::Closed);
+    }
+
+    #[test]
+    fn batch_send_reports_partial_acceptance_and_backpressure() {
+        let mut transport = MockTransport::new();
+        transport
+            .start(TransportConfig {
+                network_generation: 1,
+                max_record_size: 1200,
+            })
+            .unwrap();
+
+        let records: [&[u8]; 2] = [b"first", b"second"];
+        let outcome = transport.send_records(&records);
+
+        assert_eq!(outcome.accepted, 1);
+        assert_eq!(outcome.stop, BatchSendStop::Backpressure);
+    }
+
+    #[test]
+    fn batch_receive_preserves_lengths_and_stops_when_drained() {
+        let mut transport = MockTransport::new();
+        transport
+            .start(TransportConfig {
+                network_generation: 1,
+                max_record_size: 1200,
+            })
+            .unwrap();
+        assert_eq!(
+            transport.send_record(b"batch").unwrap(),
+            SendOutcome::Accepted
+        );
+
+        let mut first = [0u8; 16];
+        let mut second = [0u8; 16];
+        let mut output = [
+            RecordBuffer::new(&mut first),
+            RecordBuffer::new(&mut second),
+        ];
+        let outcome = transport.receive_records(&mut output);
+
+        assert_eq!(outcome.received, 1);
+        assert_eq!(outcome.stop, BatchReceiveStop::WouldBlock);
+        assert_eq!(output[0].as_slice(), b"batch");
+        assert_eq!(output[1].len(), 0);
     }
 
     #[test]
