@@ -5,7 +5,7 @@ use std::time::Duration;
 use ghoncha_transport_api::MonotonicTime;
 use ghoncha_transport_turn::{
     DatagramFlushResult, DatagramReceive, DatagramSocketError, TurnDatagramSocket,
-    TurnRelayFamilies, TurnUdpDriver, TurnUdpEngine,
+    TurnRelayFamilies, TurnUdpDriver, TurnUdpEngine, TurnUdpIoReady,
 };
 use turn_client_proto::types::Instant;
 use turn_client_proto::udp::{TurnEvent, TurnPollRet, TurnRecvRet};
@@ -372,12 +372,14 @@ fn readiness_pump_respects_budgets_and_would_block() {
     let mut receive_buffer = [0u8; 256];
     let blocked = driver
         .service_ready(
-            true,
-            true,
+            TurnUdpIoReady {
+                readable: true,
+                writable: true,
+                max_receive_datagrams: 8,
+                max_send_datagrams: 8,
+            },
             MonotonicTime(1),
             &mut receive_buffer,
-            8,
-            8,
             |_| {},
         )
         .unwrap();
@@ -389,12 +391,14 @@ fn readiness_pump_respects_budgets_and_would_block() {
 
     let progress = driver
         .service_ready(
-            false,
-            true,
+            TurnUdpIoReady {
+                readable: false,
+                writable: true,
+                max_receive_datagrams: 0,
+                max_send_datagrams: 1,
+            },
             MonotonicTime(2),
             &mut receive_buffer,
-            0,
-            1,
             |_| {},
         )
         .unwrap();
