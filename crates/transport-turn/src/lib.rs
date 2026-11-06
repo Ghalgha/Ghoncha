@@ -366,10 +366,10 @@ impl<
     /// Selects control traffic first, but serves peer data after a bounded
     /// burst of successful control sends. FIFO order is preserved per class.
     pub fn next(&self) -> Option<(DatagramClass, PendingDatagram<'_>)> {
-        if self.consecutive_control_sends >= CONTROL_BURST_LIMIT {
-            if let Some(datagram) = self.peer_data.front() {
-                return Some((DatagramClass::PeerData, datagram));
-            }
+        if self.consecutive_control_sends >= CONTROL_BURST_LIMIT
+            && let Some(datagram) = self.peer_data.front()
+        {
+            return Some((DatagramClass::PeerData, datagram));
         }
         if let Some(datagram) = self.control.front() {
             return Some((DatagramClass::Control, datagram));
