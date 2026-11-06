@@ -56,9 +56,9 @@ pub fn choose_allocation(
         if load.pressure_ppm < threshold
             && best.is_none_or(|(pressure, id)| {
                 load.pressure_ppm < pressure || (load.pressure_ppm == pressure && load.id < id)
-            }) {
+            })
+        {
             best = Some((load.pressure_ppm, load.id));
-        }
         }
     }
 
