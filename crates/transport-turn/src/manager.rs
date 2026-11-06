@@ -115,6 +115,11 @@ impl ManagedAllocation {
 /// Capacity is supplied by the adapter/runtime, not hard-coded as a product
 /// limit. Each slot owns a distinct engine, whose local socket address must be
 /// unique within this manager.
+///
+/// Capacity counts independent client transport sessions/5-tuples, not the
+/// number of relayed address-family allocations returned by one engine. A
+/// dual-stack TURN request can create multiple server-side relay addresses
+/// over one client session; it does not create additional parallel workers.
 pub struct TurnAllocationManager<const CAPACITY: usize, const FLOW_CAPACITY: usize = 1024> {
     slots: [Option<ManagedAllocation>; CAPACITY],
     len: usize,
@@ -447,6 +452,23 @@ mod tests {
             "test-password",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn dual_stack_relay_families_still_use_one_client_session_slot() {
+        let mut manager = TurnAllocationManager::<2>::new();
+        let dual_stack = TurnUdpEngine::new_with_relay_families(
+            SocketAddr::from(([192, 0, 2, 1], 40001)),
+            SocketAddr::from(([198, 51, 100, 1], 3478)),
+            "test-user",
+            "test-password",
+            crate::TurnRelayFamilies::DualStack,
+        )
+        .unwrap();
+
+        manager.insert(1, dual_stack).unwrap();
+        assert_eq!(manager.len(), 1);
+        assert_eq!(manager.get(1).unwrap().engine().local_addr().port(), 40001);
     }
 
     #[test]
