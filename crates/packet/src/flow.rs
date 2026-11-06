@@ -31,9 +31,13 @@ pub enum FlowDiscriminator {
 
 /// Why a packet could not be assigned a fully parsed flow key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+const IPV6_MAX_EXTENSION_HEADERS: usize = 8;
+const IPV6_MAX_EXTENSION_BYTES: usize = 256;
+
 pub enum FlowKeyError {
     UnsupportedIpv6Extension(u8),
     InvalidIpv6FragmentHeader,
+    Ipv6ExtensionLimit,
     TruncatedHeader,
 }
 
@@ -54,31 +58,64 @@ impl FlowKey {
                 }
             }
             IpVersion::V6 => {
-                if is_ipv6_extension(protocol) {
-                    if protocol != 44 {
-                        return Err(FlowKeyError::UnsupportedIpv6Extension(protocol));
+                let mut extension_count = 0;
+                let mut extension_bytes = 0;
+
+                while is_ipv6_extension(protocol) {
+                    if extension_count >= IPV6_MAX_EXTENSION_HEADERS {
+                        return Err(FlowKeyError::Ipv6ExtensionLimit);
                     }
-                    if bytes.len() < payload_offset + 8 {
+                    extension_count += 1;
+
+                    let remaining = bytes.len().saturating_sub(payload_offset);
+                    let header_len = match protocol {
+                        44 => {
+                            if remaining < 8 {
+                                return Err(FlowKeyError::TruncatedHeader);
+                            }
+                            let header = &bytes[payload_offset..payload_offset + 8];
+                            let offset_flags = u16::from_be_bytes([header[2], header[3]]);
+                            // RFC 8200 reserves the second octet and bits 1-2.
+                            if header[1] != 0 || offset_flags & 0x0006 != 0 {
+                                return Err(FlowKeyError::InvalidIpv6FragmentHeader);
+                            }
+                            protocol = header[0];
+                            let fragment_offset = (offset_flags & 0xfff8) >> 3;
+                            if fragment_offset != 0 || offset_flags & 1 != 0 {
+                                fragment = Some(u32::from_be_bytes([
+                                    header[4], header[5], header[6], header[7],
+                                ]));
+                                payload_offset += 8;
+                                break;
+                            }
+                            8
+                        }
+                        51 => {
+                            if remaining < 2 {
+                                return Err(FlowKeyError::TruncatedHeader);
+                            }
+                            let header = &bytes[payload_offset..];
+                            protocol = header[0];
+                            usize::from(header[1] + 2) * 4
+                        }
+                        _ => {
+                            if remaining < 2 {
+                                return Err(FlowKeyError::TruncatedHeader);
+                            }
+                            let header = &bytes[payload_offset..];
+                            protocol = header[0];
+                            usize::from(header[1] + 1) * 8
+                        }
+                    };
+
+                    if header_len > remaining {
                         return Err(FlowKeyError::TruncatedHeader);
                     }
-                    let header = &bytes[payload_offset..payload_offset + 8];
-                    let offset_flags = u16::from_be_bytes([header[2], header[3]]);
-                    // RFC 8200 reserves the second octet and bits 1-2 of
-                    // the offset/flags field; non-zero values are malformed.
-                    if header[1] != 0 || offset_flags & 0x0006 != 0 {
-                        return Err(FlowKeyError::InvalidIpv6FragmentHeader);
+                    extension_bytes += header_len;
+                    if extension_bytes > IPV6_MAX_EXTENSION_BYTES {
+                        return Err(FlowKeyError::Ipv6ExtensionLimit);
                     }
-                    protocol = header[0];
-                    let fragment_offset = (offset_flags & 0xfff8) >> 3;
-                    if fragment_offset != 0 || offset_flags & 1 != 0 {
-                        fragment = Some(u32::from_be_bytes([
-                            header[4], header[5], header[6], header[7],
-                        ]));
-                    }
-                    payload_offset += 8;
-                    if is_ipv6_extension(protocol) {
-                        return Err(FlowKeyError::UnsupportedIpv6Extension(protocol));
-                    }
+                    payload_offset += header_len;
                 }
             }
         }
@@ -162,7 +199,8 @@ fn hash_byte(hash: &mut u64, byte: u8) {
 }
 
 fn is_ipv6_extension(next_header: u8) -> bool {
-    matches!(next_header, 0 | 43 | 44 | 50 | 51 | 60 | 135 | 139 | 140)
+    // ESP (50) is intentionally opaque: it receives network-level affinity.
+    matches!(next_header, 0 | 43 | 44 | 51 | 60 | 135 | 139 | 140)
 }
 
 #[cfg(test)]
@@ -270,6 +308,80 @@ mod tests {
         assert_eq!(
             first_key.discriminator,
             FlowDiscriminator::Fragment(0x1234_5678)
+        );
+    }
+
+    #[test]
+    fn walks_ipv6_hop_by_hop_and_destination_options_before_udp() {
+        let mut bytes = std::vec![0_u8; 40 + 8 + 8 + 8];
+        bytes[0] = 0x60;
+        bytes[4..6].copy_from_slice(&24_u16.to_be_bytes());
+        bytes[6] = 0; // Hop-by-Hop Options
+        bytes[40] = 60; // Destination Options
+        bytes[41] = 0; // 8-byte header
+        bytes[48] = 17; // UDP
+        bytes[49] = 0;
+        bytes[56..58].copy_from_slice(&1234_u16.to_be_bytes());
+        bytes[58..60].copy_from_slice(&443_u16.to_be_bytes());
+
+        let key = FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()).unwrap();
+        assert_eq!(
+            key.discriminator,
+            FlowDiscriminator::Ports {
+                source: 1234,
+                destination: 443
+            }
+        );
+        assert_eq!(key.protocol, 17);
+    }
+
+    #[test]
+    fn walks_ipv6_authentication_header_before_tcp() {
+        let mut bytes = std::vec![0_u8; 40 + 12 + 4];
+        bytes[0] = 0x60;
+        bytes[4..6].copy_from_slice(&16_u16.to_be_bytes());
+        bytes[6] = 51; // Authentication Header
+        bytes[40] = 6; // TCP
+        bytes[41] = 1; // (1 + 2) * 4 = 12 bytes
+        bytes[52..54].copy_from_slice(&3210_u16.to_be_bytes());
+        bytes[54..56].copy_from_slice(&443_u16.to_be_bytes());
+
+        let key = FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()).unwrap();
+        assert_eq!(
+            key.discriminator,
+            FlowDiscriminator::Ports {
+                source: 3210,
+                destination: 443
+            }
+        );
+    }
+
+    #[test]
+    fn bounds_ipv6_extension_header_walk() {
+        let mut bytes = std::vec![0_u8; 40 + 9 * 8];
+        bytes[0] = 0x60;
+        bytes[4..6].copy_from_slice(&72_u16.to_be_bytes());
+        bytes[6] = 0;
+        for index in 0..9 {
+            let offset = 40 + index * 8;
+            bytes[offset] = if index == 8 { 17 } else { 0 };
+            bytes[offset + 1] = 0;
+        }
+        assert_eq!(
+            FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
+            Err(FlowKeyError::Ipv6ExtensionLimit)
+        );
+    }
+
+    #[test]
+    fn rejects_truncated_ipv6_extension_header() {
+        let mut bytes = std::vec![0_u8; 44];
+        bytes[0] = 0x60;
+        bytes[4..6].copy_from_slice(&4_u16.to_be_bytes());
+        bytes[6] = 0;
+        assert_eq!(
+            FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
+            Err(FlowKeyError::TruncatedHeader)
         );
     }
 
