@@ -758,7 +758,9 @@ pub enum TurnUdpDriverError {
 pub enum TurnUdpDriverReceive<'a> {
     WouldBlock,
     /// A datagram was truncated by the socket adapter and was discarded.
-    Truncated { from: SocketAddr },
+    Truncated {
+        from: SocketAddr,
+    },
     Datagram(TurnReceiveResult<'a>),
 }
 
@@ -941,7 +943,9 @@ impl<
             }
         };
         if received.truncated {
-            return Ok(TurnUdpDriverReceive::Truncated { from: received.from });
+            return Ok(TurnUdpDriverReceive::Truncated {
+                from: received.from,
+            });
         }
         if received.len > buffer.len() {
             self.retired = true;
