@@ -77,9 +77,9 @@ impl ConnectionProfile {
                 supports_live_resize: capabilities.supports_live_resize,
             }),
             Self::Standard => {
-                let minimum = if maximum < 30 { maximum } else { 30 };
-                let target = if maximum < 35 { maximum } else { 35 };
-                let upper = if maximum < 40 { maximum } else { 40 };
+                let minimum = maximum.min(30);
+                let target = maximum.min(35);
+                let upper = maximum.min(40);
 
                 Ok(FlowPlan {
                     initial_flows: minimum,
