@@ -99,19 +99,19 @@ mod tests {
 
     #[test]
     fn rejects_invalid_lengths_separators_and_hex() {
-        assert_eq!(
+        assert!(matches!(
             Sha256Fingerprint::parse_colon_hex("00"),
             Err(FingerprintParseError::InvalidLength)
-        );
+        ));
         let invalid_separator = FINGERPRINT.replacen(':', "-", 1);
-        assert_eq!(
+        assert!(matches!(
             Sha256Fingerprint::parse_colon_hex(&invalid_separator),
             Err(FingerprintParseError::InvalidSeparator)
-        );
+        ));
         let invalid_hex = FINGERPRINT.replacen("00", "GG", 1);
-        assert_eq!(
+        assert!(matches!(
             Sha256Fingerprint::parse_colon_hex(&invalid_hex),
             Err(FingerprintParseError::InvalidHexDigit)
-        );
+        ));
     }
 }
