@@ -17,12 +17,20 @@ use turn_client_proto::types::{AddressFamily, Instant, TransportType, TurnCreden
 
 use crate::{MonotonicTime, OutboundDatagram, TurnReceiveResult, TurnRelayFamilies};
 
+/// Maximum bytes accepted from one TCP read before the TURN parser must be drained.
+pub const MAX_TURN_TCP_INPUT_CHUNK: usize = 16_384;
+
 /// Errors returned by the TURN-over-TCP protocol adapter.
 #[derive(Debug)]
 pub enum TurnTcpError {
     InvalidLocalPort,
     InvalidServerAddress,
     AddressFamilyMismatch,
+    PeerAddressMismatch,
+    InvalidQueueConfiguration,
+    EmptyInput,
+    InputChunkTooLarge { maximum: usize, actual: usize },
+    BufferedDataPending,
     TimeOutOfRange,
     CreatePermission(CreatePermissionError),
     BindChannel(BindChannelError),
@@ -45,6 +53,7 @@ pub struct TurnTcpEngine {
     client: TurnClientTcp,
     local_addr: SocketAddr,
     server_addr: SocketAddr,
+    buffered_drain_required: bool,
 }
 
 impl TurnTcpEngine {
@@ -108,6 +117,7 @@ impl TurnTcpEngine {
             client,
             local_addr,
             server_addr,
+            buffered_drain_required: false,
         })
     }
 
@@ -152,9 +162,22 @@ impl TurnTcpEngine {
         bytes: &'a [u8],
         now: MonotonicTime,
     ) -> Result<TurnReceiveResult<'a>, TurnTcpError> {
+        if bytes.is_empty() {
+            return Err(TurnTcpError::EmptyInput);
+        }
+        if bytes.len() > MAX_TURN_TCP_INPUT_CHUNK {
+            return Err(TurnTcpError::InputChunkTooLarge {
+                maximum: MAX_TURN_TCP_INPUT_CHUNK,
+                actual: bytes.len(),
+            });
+        }
+        if self.buffered_drain_required {
+            return Err(TurnTcpError::BufferedDataPending);
+        }
+
         let now = to_instant(now)?;
         let transmit = Transmit::new(bytes, TransportType::Tcp, self.server_addr, self.local_addr);
-        Ok(match self.client.recv(transmit, now) {
+        let result = match self.client.recv(transmit, now) {
             TurnRecvRet::Handled => TurnReceiveResult::Handled,
             TurnRecvRet::Ignored(transmit) => TurnReceiveResult::Ignored {
                 from: transmit.from,
@@ -172,7 +195,9 @@ impl TurnTcpEngine {
                 icmp_code,
                 icmp_data,
             },
-        })
+        };
+        self.buffered_drain_required = true;
+        Ok(result)
     }
 
     /// Drains one additional complete peer payload buffered by the TURN parser.
@@ -185,7 +210,11 @@ impl TurnTcpEngine {
     ) -> Result<Option<turn_client_proto::api::TurnPeerData<alloc::vec::Vec<u8>>>, TurnTcpError>
     {
         let now = to_instant(now)?;
-        Ok(self.client.poll_recv(now))
+        let peer_data = self.client.poll_recv(now);
+        if peer_data.is_none() {
+            self.buffered_drain_required = false;
+        }
+        Ok(peer_data)
     }
 
     /// Creates a permission for a UDP peer address.
@@ -335,6 +364,43 @@ mod tests {
     }
 
     #[test]
+    fn stream_parser_requires_buffered_frames_to_be_drained_before_next_read() {
+        let mut engine =
+            TurnTcpEngine::new(local(), server(), "test-user", "test-password").unwrap();
+        assert!(matches!(
+            engine.receive_stream_bytes(&[0x00, 0x01], MonotonicTime(1)),
+            Ok(TurnReceiveResult::Handled)
+        ));
+        assert!(matches!(
+            engine.receive_stream_bytes(&[0x00], MonotonicTime(2)),
+            Err(TurnTcpError::BufferedDataPending)
+        ));
+        assert!(engine.poll_peer_data(MonotonicTime(2)).unwrap().is_none());
+        assert!(matches!(
+            engine.receive_stream_bytes(&[0x00], MonotonicTime(3)),
+            Ok(TurnReceiveResult::Handled)
+        ));
+    }
+
+    #[test]
+    fn stream_parser_rejects_empty_and_oversized_input_chunks() {
+        let mut engine =
+            TurnTcpEngine::new(local(), server(), "test-user", "test-password").unwrap();
+        assert!(matches!(
+            engine.receive_stream_bytes(&[], MonotonicTime(1)),
+            Err(TurnTcpError::EmptyInput)
+        ));
+        let oversized = alloc::vec![0; MAX_TURN_TCP_INPUT_CHUNK + 1];
+        assert!(matches!(
+            engine.receive_stream_bytes(&oversized, MonotonicTime(1)),
+            Err(TurnTcpError::InputChunkTooLarge {
+                maximum: MAX_TURN_TCP_INPUT_CHUNK,
+                actual
+            }) if actual == oversized.len()
+        ));
+    }
+
+    #[test]
     fn monotonic_time_conversion_is_checked() {
         assert!(matches!(
             to_instant(MonotonicTime(u64::MAX)),
@@ -349,6 +415,7 @@ mod tests {
 /// to the selected underlay Network, and protected from the VPN on Android.
 pub trait TurnStreamSocket {
     fn local_addr(&self) -> SocketAddr;
+    fn peer_addr(&self) -> SocketAddr;
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TurnStreamIoError>;
     fn write(&mut self, bytes: &[u8]) -> Result<usize, TurnStreamIoError>;
 }
@@ -603,6 +670,12 @@ impl<
         username: &str,
         password: &str,
     ) -> Result<Self, TurnTcpError> {
+        if CAPACITY == 0 || MAX_FRAME == 0 || MAX_QUEUED_BYTES < MAX_FRAME {
+            return Err(TurnTcpError::InvalidQueueConfiguration);
+        }
+        if socket.peer_addr() != server_addr {
+            return Err(TurnTcpError::PeerAddressMismatch);
+        }
         let engine = TurnTcpEngine::new(socket.local_addr(), server_addr, username, password)?;
         Ok(Self {
             socket,
@@ -758,15 +831,16 @@ impl<
     ) -> Result<TurnTcpDriverReceive<'a>, TurnTcpDriverError> {
         self.ensure_active()?;
         if buffer.is_empty() {
-            return Ok(TurnTcpDriverReceive::WouldBlock);
+            return Err(TurnTcpDriverError::Queue(TurnTcpQueueError::EmptyFrame));
         }
+        let read_buffer_len = buffer.len().min(MAX_TURN_TCP_INPUT_CHUNK);
 
-        match self.socket.read(buffer) {
+        match self.socket.read(&mut buffer[..read_buffer_len]) {
             Ok(0) => {
                 self.retire();
                 Ok(TurnTcpDriverReceive::Closed)
             }
-            Ok(read) if read > buffer.len() => {
+            Ok(read) if read > read_buffer_len => {
                 self.retire();
                 Err(TurnTcpDriverError::Socket(TurnStreamIoError::Failed))
             }
@@ -842,6 +916,11 @@ impl TurnStreamSocket for std::net::TcpStream {
             .expect("connected TCP stream must expose its local address")
     }
 
+    fn peer_addr(&self) -> SocketAddr {
+        std::net::TcpStream::peer_addr(self)
+            .expect("connected TCP stream must expose its peer address")
+    }
+
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
         use std::io::Read;
         std::io::Read::read(self, buffer).map_err(|error| {
@@ -873,6 +952,7 @@ mod driver_tests {
     #[derive(Debug)]
     struct MockStream {
         local: SocketAddr,
+        peer: SocketAddr,
         writes: Vec<u8>,
         write_limit: usize,
         would_block: bool,
@@ -881,6 +961,10 @@ mod driver_tests {
     impl TurnStreamSocket for MockStream {
         fn local_addr(&self) -> SocketAddr {
             self.local
+        }
+
+        fn peer_addr(&self) -> SocketAddr {
+            self.peer
         }
 
         fn read(&mut self, _buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
@@ -900,6 +984,7 @@ mod driver_tests {
     fn mock_stream() -> MockStream {
         MockStream {
             local: "192.0.2.10:40000".parse().unwrap(),
+            peer: "198.51.100.1:3478".parse().unwrap(),
             writes: Vec::new(),
             write_limit: 2,
             would_block: false,
@@ -985,6 +1070,34 @@ mod driver_tests {
         );
         assert_eq!(driver.socket.writes, &[1, 2, 3, 4, 5]);
         assert_eq!(driver.queued_frames(), 0);
+    }
+
+    #[test]
+    fn driver_rejects_stream_connected_to_wrong_server() {
+        let mut socket = mock_stream();
+        socket.peer = "203.0.113.7:3478".parse().unwrap();
+        assert!(matches!(
+            TurnTcpDriver::<MockStream, 2, 16, 32>::new(
+                socket,
+                "198.51.100.1:3478".parse().unwrap(),
+                "test-user",
+                "test-password"
+            ),
+            Err(TurnTcpError::PeerAddressMismatch)
+        ));
+    }
+
+    #[test]
+    fn driver_rejects_unusable_queue_configuration() {
+        assert!(matches!(
+            TurnTcpDriver::<MockStream, 0, 16, 32>::new(
+                mock_stream(),
+                "198.51.100.1:3478".parse().unwrap(),
+                "test-user",
+                "test-password"
+            ),
+            Err(TurnTcpError::InvalidQueueConfiguration)
+        ));
     }
 
     #[test]
