@@ -1706,6 +1706,24 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
         }
     }
 
+    /// Resolves the next wakeup against the current monotonic time.
+    ///
+    /// Expired deadlines are reported as immediate work; call take_due to
+    /// retrieve their Allocation IDs. Future deadlines remain absolute values.
+    pub fn next_wakeup_at(&self, now: MonotonicTime) -> TurnReactorWakeup {
+        if self.ready_count > 0 {
+            TurnReactorWakeup::Ready
+        } else if let Some(deadline) = self.next_deadline() {
+            if deadline <= now {
+                TurnReactorWakeup::Ready
+            } else {
+                TurnReactorWakeup::Deadline(deadline)
+            }
+        } else {
+            TurnReactorWakeup::Idle
+        }
+    }
+
     /// Returns the earliest absolute monotonic deadline, if any.
     pub fn next_deadline(&self) -> Option<MonotonicTime> {
         self.slots
@@ -1779,6 +1797,34 @@ mod reactor_tests {
         assert_eq!(reactor.take_due(MonotonicTime(150), &mut due, 3), 1);
         assert_eq!(due[0], 10);
         assert_eq!(reactor.next_deadline(), Some(MonotonicTime(200)));
+    }
+
+    #[test]
+    fn reactor_wakeup_at_distinguishes_expired_and_future_deadlines() {
+        let mut reactor = TurnUdpReactor::<2>::new();
+        reactor.register(11).unwrap();
+        reactor.schedule(11, MonotonicTime(100)).unwrap();
+
+        assert_eq!(
+            reactor.next_wakeup_at(MonotonicTime(99)),
+            TurnReactorWakeup::Deadline(MonotonicTime(100))
+        );
+        assert_eq!(
+            reactor.next_wakeup_at(MonotonicTime(100)),
+            TurnReactorWakeup::Ready
+        );
+        assert_eq!(
+            reactor.next_wakeup_at(MonotonicTime(101)),
+            TurnReactorWakeup::Ready
+        );
+
+        let mut due = [0; 1];
+        assert_eq!(reactor.take_due(MonotonicTime(100), &mut due, 2), 1);
+        assert_eq!(due[0], 11);
+        assert_eq!(
+            reactor.next_wakeup_at(MonotonicTime(101)),
+            TurnReactorWakeup::Idle
+        );
     }
 
     #[test]
