@@ -343,6 +343,19 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize> Default
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ghoncha_packet::{IpAddress, flow::FlowDiscriminator};
+
+    fn flow_key() -> FlowKey {
+        FlowKey {
+            source: IpAddress::V4([10, 0, 0, 1]),
+            destination: IpAddress::V4([10, 0, 0, 2]),
+            protocol: 17,
+            discriminator: FlowDiscriminator::Ports {
+                source: 40000,
+                destination: 53,
+            },
+        }
+    }
 
     fn engine(local_port: u16) -> TurnUdpEngine {
         TurnUdpEngine::new(
@@ -478,6 +491,23 @@ mod tests {
         let returned = manager.take_drained(1).unwrap();
         assert_eq!(returned.local_addr().port(), 40001);
         assert!(manager.is_empty());
+    }
+
+    #[test]
+    fn dispatch_preserves_affinity_and_clears_it_when_allocation_is_retired() {
+        let mut manager = TurnAllocationManager::<2>::new();
+        manager.insert(7, engine(40007)).unwrap();
+        let first = manager.dispatch_flow(flow_key(), 1).unwrap();
+        assert_eq!(first.kind, DispatchKind::NewFlow);
+        assert_eq!(first.worker_id, 7);
+        let second = manager.dispatch_flow(flow_key(), 2).unwrap();
+        assert_eq!(second.kind, DispatchKind::AffinityHit);
+        manager.begin_drain(7).unwrap();
+        manager.take_drained(7).unwrap();
+        manager.insert(7, engine(40008)).unwrap();
+        let after_reuse = manager.dispatch_flow(flow_key(), 3).unwrap();
+        assert_eq!(after_reuse.kind, DispatchKind::NewFlow);
+        assert_eq!(after_reuse.worker_id, 7);
     }
 
     #[test]
