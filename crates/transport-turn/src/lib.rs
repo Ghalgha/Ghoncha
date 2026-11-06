@@ -15,6 +15,7 @@ use core::net::{IpAddr, SocketAddr};
 
 use ghoncha_transport_api::MonotonicTime;
 use turn_client_proto::api::{TurnClientApi, TurnConfig};
+pub use turn_client_proto::api::TurnPeerData;
 use turn_client_proto::prelude::DelayedTransmitBuild;
 use turn_client_proto::stun::agent::Transmit;
 use turn_client_proto::stun::types::data::Data;
@@ -66,10 +67,7 @@ pub enum TurnReceiveResult<'a> {
     Ignored {
         from: SocketAddr,
     },
-    PeerData {
-        peer: SocketAddr,
-        payload: &'a [u8],
-    },
+    PeerData(TurnPeerData<&'a [u8]>),
     PeerIcmp {
         peer: SocketAddr,
         icmp_type: u8,
@@ -603,10 +601,7 @@ impl TurnUdpEngine {
             TurnRecvRet::Ignored(transmit) => Ok(TurnReceiveResult::Ignored {
                 from: transmit.from,
             }),
-            TurnRecvRet::PeerData(peer_data) => Ok(TurnReceiveResult::PeerData {
-                peer: peer_data.peer,
-                payload: peer_data.data(),
-            }),
+            TurnRecvRet::PeerData(peer_data) => Ok(TurnReceiveResult::PeerData(peer_data)),
             TurnRecvRet::PeerIcmp {
                 peer,
                 icmp_type,
