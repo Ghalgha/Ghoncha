@@ -1599,6 +1599,7 @@ pub struct TurnUdpReactor<const CAPACITY: usize> {
     slots: [Option<TurnReactorSlot>; CAPACITY],
     cursor: usize,
     len: usize,
+    ready_count: usize,
 }
 
 impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
@@ -1607,6 +1608,7 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
             slots: [None; CAPACITY],
             cursor: 0,
             len: 0,
+            ready_count: 0,
         }
     }
 
@@ -1659,7 +1661,10 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
     /// a protocol event, without fabricating a monotonic timer deadline.
     pub fn wake(&mut self, allocation_id: u16) -> Result<(), TurnReactorError> {
         let slot = self.find_mut(allocation_id)?;
-        slot.ready = true;
+        if !slot.ready {
+            slot.ready = true;
+            self.ready_count += 1;
+        }
         Ok(())
     }
 
@@ -1679,12 +1684,26 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
         else {
             return Err(TurnReactorError::UnknownAllocation);
         };
+        if self.slots[index].is_some_and(|slot| slot.ready) {
+            self.ready_count -= 1;
+        }
         self.slots[index] = None;
         self.len -= 1;
         if CAPACITY != 0 {
             self.cursor %= CAPACITY;
         }
         Ok(())
+    }
+
+    /// Returns whether immediate work or a timer should wake the platform loop.
+    pub fn next_wakeup(&self) -> TurnReactorWakeup {
+        if self.ready_count > 0 {
+            TurnReactorWakeup::Ready
+        } else if let Some(deadline) = self.next_deadline() {
+            TurnReactorWakeup::Deadline(deadline)
+        } else {
+            TurnReactorWakeup::Idle
+        }
     }
 
     /// Returns the earliest absolute monotonic deadline, if any.
@@ -1717,7 +1736,10 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
             {
                 output[written] = slot.allocation_id;
                 written += 1;
-                slot.ready = false;
+                if slot.ready {
+                    slot.ready = false;
+                    self.ready_count -= 1;
+                }
                 slot.deadline = None;
             }
         }
@@ -1787,18 +1809,23 @@ mod reactor_tests {
     fn reactor_wake_is_immediate_work_not_a_fake_timer() {
         let mut reactor = TurnUdpReactor::<2>::new();
         reactor.register(4).unwrap();
+        assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Idle);
         reactor.schedule(4, MonotonicTime(500)).unwrap();
+        assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Deadline(MonotonicTime(500)));
         reactor.wake(4).unwrap();
+        reactor.wake(4).unwrap();
+        assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Ready);
         assert_eq!(reactor.next_deadline(), Some(MonotonicTime(500)));
 
         let mut due = [0; 1];
         assert_eq!(reactor.take_due(MonotonicTime(100), &mut due, 2), 1);
         assert_eq!(due[0], 4);
-        assert_eq!(reactor.next_deadline(), None);
+        assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Idle);
         assert_eq!(reactor.take_due(MonotonicTime(100), &mut due, 2), 0);
 
         reactor.wake(4).unwrap();
         reactor.unregister(4).unwrap();
+        assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Idle);
         assert_eq!(reactor.next_deadline(), None);
         assert_eq!(
             reactor.cancel_timer(4),
