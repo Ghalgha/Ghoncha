@@ -199,12 +199,15 @@ The CSQTT TURN engine remains an important comparison implementation. Compare wi
 
 `dimpl 0.9.0` is a Sans-I/O DTLS 1.2/1.3 candidate with explicit version constructors and DTLS-SRTP key export. It is a candidate for the **client-to-GHONCHA-gateway DTLS-SRTP handshake**, not a TURN client and not the TURN-to-relay security wrapper.
 - prove DTLS 1.2 interoperability with the reference CSQTT/WDTT client and server wire behavior;
-- verify certificate or PSK peer authentication and reject insecure verification shortcuts;
+- verify mutual certificate or PSK peer authentication and reject insecure verification shortcuts;
 - the library exposes the peer certificate but explicitly leaves PKI/fingerprint/name validation to the application; GHONCHA must validate the certificate fingerprint against authenticated provisioning before accepting exported SRTP keying material or sending tunnel data;
-- verify actual `use_srtp` profile negotiation and DTLS-SRTP interoperability; prefer a certificate-based DTLS 1.2 ECDHE-ECDSA profile for the first test;
+- **security blocker:** in v0.9.0, `Output::KeyingMaterial` wraps a heap `Vec<u8>` and `KeyingMaterial` does not implement zeroization. The exporter copies the material into that Vec. Do not treat dropping the value as secure erasure; require an upstream fix or a reviewed maintained patch before production use;
+- **performance/configuration blocker:** the built-in DTLS-SRTP profile preference is fixed as AEAD-AES-256-GCM, AEAD-AES-128-GCM, then AES128-CM-SHA1-80. The public configuration does not expose an allow-list/preference setter. Measure AES-256 versus AES-128 on target ARM devices and require configurable profile policy if AES-128 is the chosen performance baseline;
+- the default feature set enables `aws-lc-rs` and `rcgen`; enabling `rcgen` also enables AWS-LC. Compare `rust-crypto` and AWS-LC-RS Android builds, binary size, CPU, and battery rather than accepting defaults;
+- defaults include bounded DTLS queues, a 40-second handshake timeout, and retransmission backoff; tune and test them for mobile network handovers and credential expiry;
 - every fatal error from the public DTLS processing API requires discarding the DTLS instance and starting a new handshake; transient malformed/replayed datagrams are handled internally by the library;
 - the release documents no session resumption or renegotiation, so measure full-handshake cost during network handover and call/credential refresh;
-- test retransmission, fragmentation, profile negotiation, key lifecycle and malformed records;
+- test retransmission, fragmentation, profile negotiation, key lifecycle, certificate pinning and malformed records;
 - verify Android NDK targets and crypto dependency portability;
 - its 0.9.0 manifest declares edition 2024, MSRV 1.89.0, and MIT OR Apache-2.0;
 - the default feature set enables aws-lc-rs and rcgen; a separate rust-crypto feature exists. Compare Android ABI build size, compile time, CPU performance, and cryptographic-provider portability before selecting a provider;
