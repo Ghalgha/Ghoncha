@@ -11,18 +11,20 @@ The logical client path is:
 ```text
 Android VpnService / TUN
   -> Rust IP packet engine
-  -> GHONCHA tunnel protocol (peer authentication, AEAD, replay protection)
-  -> Transport API (opaque records)
+  -> WireGuard tunnel (inner VPN authentication and AEAD)
+  -> Transport API (opaque WireGuard datagrams)
        -> VK Calls adapter (primary)
-            -> VK credential provider
+            -> VK credential provider (setup/refresh only)
+            -> DTLS application-data carrier to GHONCHA gateway
             -> TURN client / ChannelData
-            -> DTLS carrier to GHONCHA gateway
+            -> VK TURN relay
        -> Direct UDP adapter (future)
-       -> TURN provider adapter (future)
+       -> Generic TURN adapter (future)
        -> MASQUE adapter (future)
        -> other approved adapters
-  -> GHONCHA gateway
-  -> tunnel protocol verification / decapsulation
+  -> GHONCHA gateway UDP peer socket
+  -> DTLS termination and pinned gateway identity check (VK path)
+  -> WireGuard peer authentication/decapsulation
   -> IP forwarding and NAT
 ```
 
