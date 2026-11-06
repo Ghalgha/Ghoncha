@@ -189,7 +189,7 @@ pub trait RecordTransport {
 
     /// Advances protocol timers and I/O readiness by at most budget.
     fn poll(&mut self, now: MonotonicTime, budget: IoBudget)
-        -> Result<PollOutcome, TransportError>;
+    -> Result<PollOutcome, TransportError>;
 
     /// Enqueues one complete record or reports backpressure.
     fn send_record(&mut self, record: &[u8]) -> Result<SendOutcome, TransportError>;
