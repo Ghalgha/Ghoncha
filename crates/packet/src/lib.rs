@@ -1,5 +1,5 @@
 #![no_std]
- 
+
 //! Allocation-free validation and views over IPv4 and IPv6 packets.
 //!
 //! The parser borrows the input buffer and never copies packet contents.
