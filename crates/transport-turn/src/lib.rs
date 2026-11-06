@@ -832,7 +832,10 @@ mod tests {
             }
         );
         assert_eq!(queues.control_len(), 0);
-        assert_eq!(queues.flush_one(|_, _| unreachable!()), DatagramFlushResult::Empty);
+        assert_eq!(
+            queues.flush_one(|_, _| unreachable!()),
+            DatagramFlushResult::Empty
+        );
     }
 
     #[test]
