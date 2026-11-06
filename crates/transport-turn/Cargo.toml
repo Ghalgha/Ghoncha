@@ -15,3 +15,6 @@ std = ["turn-client-proto/std"]
 [dependencies]
 ghoncha-transport-api = { path = "../transport-api" }
 turn-client-proto = { version = "=0.7.3", default-features = false }
+
+[dev-dependencies]
+turn-server-proto = { version = "=0.7.3", default-features = false, features = ["std"] }
