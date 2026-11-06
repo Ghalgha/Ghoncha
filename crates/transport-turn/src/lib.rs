@@ -82,6 +82,10 @@ pub enum DatagramQueueError {
         queued: usize,
         incoming: usize,
     },
+    EncodedLengthExceedsBuffer {
+        declared: usize,
+        available: usize,
+    },
 }
 
 /// Fixed-capacity UDP send queue.
@@ -258,6 +262,25 @@ impl<
         datagram: &[u8],
     ) -> Result<(), DatagramQueueError> {
         self.peer_data.push(destination, datagram)
+    }
+
+    /// Queues the exact encoded prefix returned by `TurnUdpEngine::send_to_into`.
+    ///
+    /// The output buffer may be larger than the encoded datagram. A mismatched
+    /// reported length is rejected rather than truncating or reading past it.
+    pub fn push_peer_output(
+        &mut self,
+        outbound: OutboundDatagram,
+        encoded_buffer: &[u8],
+    ) -> Result<(), DatagramQueueError> {
+        if outbound.len > encoded_buffer.len() {
+            return Err(DatagramQueueError::EncodedLengthExceedsBuffer {
+                declared: outbound.len,
+                available: encoded_buffer.len(),
+            });
+        }
+        self.peer_data
+            .push(outbound.destination, &encoded_buffer[..outbound.len])
     }
 
     /// Selects control traffic first, preserving FIFO order within each class.
@@ -646,6 +669,40 @@ mod tests {
         assert_eq!(pending.bytes, &[4, 5]);
         assert_eq!(queues.pop_sent(class), Some(2));
         assert!(queues.next().is_none());
+    }
+
+    #[test]
+    fn peer_output_queues_only_the_encoded_prefix() {
+        let mut queues = TurnUdpSendQueues::<1, 1, 8, 8, 8>::new();
+        let outbound = OutboundDatagram {
+            destination: destination(),
+            len: 3,
+        };
+        queues
+            .push_peer_output(outbound, &[1, 2, 3, 99, 99])
+            .unwrap();
+
+        let (class, pending) = queues.next().unwrap();
+        assert_eq!(class, DatagramClass::PeerData);
+        assert_eq!(pending.bytes, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn peer_output_rejects_length_beyond_buffer() {
+        let mut queues = TurnUdpSendQueues::<1, 1, 8, 8, 8>::new();
+        let outbound = OutboundDatagram {
+            destination: destination(),
+            len: 4,
+        };
+
+        assert_eq!(
+            queues.push_peer_output(outbound, &[1, 2, 3]),
+            Err(DatagramQueueError::EncodedLengthExceedsBuffer {
+                declared: 4,
+                available: 3,
+            })
+        );
+        assert_eq!(queues.peer_data_len(), 0);
     }
 
     #[test]
