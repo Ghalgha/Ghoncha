@@ -533,6 +533,10 @@ mod tests {
             manager.take_drained(1),
             Err(AllocationManagerError::PendingWorkRemains)
         ));
+        assert!(matches!(
+            manager.begin_deallocation(1),
+            Err(AllocationManagerError::PendingWorkRemains)
+        ));
         manager.update_load(1, AllocationLoad::IDLE).unwrap();
         manager.begin_deallocation(1).unwrap();
         let returned = manager.take_drained(1).unwrap();
@@ -577,6 +581,7 @@ mod tests {
         };
         assert_eq!(second.kind, DispatchKind::AffinityHit);
         manager.begin_drain(7).unwrap();
+        manager.begin_deallocation(7).unwrap();
         manager.take_drained(7).unwrap();
         manager.insert(7, engine(40008)).unwrap();
         let after_reuse = manager.dispatch_flow(flow_key(), 3, 2).unwrap();
@@ -702,6 +707,10 @@ mod tests {
         manager.mark_unhealthy(1).unwrap();
         assert!(matches!(
             manager.take_drained(1),
+            Err(AllocationManagerError::PendingWorkRemains)
+        ));
+        assert!(matches!(
+            manager.begin_deallocation(1),
             Err(AllocationManagerError::PendingWorkRemains)
         ));
         manager.update_load(1, AllocationLoad::IDLE).unwrap();
