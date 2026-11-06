@@ -141,7 +141,7 @@ mod tests {
         );
         assert!(!policy.is_due(25 * SECOND, 10 * SECOND));
         assert!(policy.is_due(26 * SECOND, 10 * SECOND));
-        assert!(!policy.is_due(26 * SECOND, 2SECOND));
+        assert!(!policy.is_due(26 * SECOND, 21 * SECOND));
     }
 
     #[test]
