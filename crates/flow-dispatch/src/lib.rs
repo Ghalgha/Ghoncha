@@ -308,14 +308,12 @@ mod tests {
     fn worker_loss_remaps_only_affected_flow() {
         let mut dispatcher = FlowDispatcher::<8>::new();
         let first = dispatcher.dispatch(key(53), 10, &WORKERS).unwrap();
-        let reduced = [
-            Worker {
-                id: 10,
-                eligible: false,
-            },
-            WORKERS[1],
-            WORKERS[2],
-        ];
+        let mut reduced = WORKERS;
+        for worker in &mut reduced {
+            if worker.id == first.worker_id {
+                worker.eligible = false;
+            }
+        }
         let remapped = dispatcher.dispatch(key(53), 20, &reduced).unwrap();
         assert_eq!(remapped.kind, DispatchKind::RemappedAfterWorkerLoss);
         assert_ne!(first.worker_id, remapped.worker_id);
@@ -350,10 +348,10 @@ mod tests {
     #[test]
     fn expiry_scan_respects_its_budget() {
         let mut dispatcher = FlowDispatcher::<8>::new();
-        for port in 1..=4 {
+        for port in 1..=8 {
             dispatcher.dispatch(key(port), 1, &WORKERS).unwrap();
         }
         assert_eq!(dispatcher.expire_idle(100, 10, 2), 2);
-        assert_eq!(dispatcher.len(), 2);
+        assert_eq!(dispatcher.len(), 6);
     }
 }
