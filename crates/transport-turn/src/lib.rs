@@ -12,6 +12,7 @@ use core::net::{IpAddr, SocketAddr};
 
 use ghoncha_transport_api::MonotonicTime;
 use turn_client_proto::api::{TurnClientApi, TurnConfig};
+use turn_client_proto::prelude::DelayedTransmitBuild;
 use turn_client_proto::stun::agent::Transmit;
 use turn_client_proto::stun::types::data::Data;
 use turn_client_proto::stun::types::message::IntegrityAlgorithm;
