@@ -150,6 +150,27 @@ impl FlowKey {
         })
     }
 
+    /// Builds a flow key, falling back to coarse network affinity when the
+    /// bounded IPv6 extension walk reaches its configured limit.
+    ///
+    /// Malformed or truncated headers remain errors; only a valid packet whose
+    /// extension chain exceeds the parser budget receives the conservative key.
+    pub fn from_packet_with_conservative_fallback(
+        packet: &IpPacket<'_>,
+    ) -> Result<Self, FlowKeyError> {
+        match Self::from_packet(packet) {
+            Ok(key) => Ok(key),
+            Err(FlowKeyError::Ipv6ExtensionLimit)
+            | Err(FlowKeyError::UnsupportedIpv6Extension(_)) => Ok(Self {
+                source: packet.source(),
+                destination: packet.destination(),
+                protocol: packet.next_header(),
+                discriminator: FlowDiscriminator::Network,
+            }),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Deterministic placement hash. This is not a cryptographic primitive.
     pub fn stable_hash(self) -> u64 {
         let mut hash = 0xcbf2_9ce4_8422_2325_u64;
@@ -264,6 +285,28 @@ mod tests {
             FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
             Err(FlowKeyError::TruncatedHeader)
         );
+    }
+
+    #[test]
+    fn uses_conservative_affinity_when_ipv6_extension_budget_is_exceeded() {
+        let mut bytes = std::vec![0_u8; 40 + 9 * 8];
+        bytes[0] = 0x60;
+        bytes[4..6].copy_from_slice(&72_u16.to_be_bytes());
+        bytes[6] = 0;
+        for index in 0..9 {
+            let offset = 40 + index * 8;
+            bytes[offset] = if index == 8 { 17 } else { 0 };
+            bytes[offset + 1] = 0;
+        }
+        let packet = IpPacket::parse(&bytes).unwrap();
+
+        assert_eq!(
+            FlowKey::from_packet(&packet),
+            Err(FlowKeyError::Ipv6ExtensionLimit)
+        );
+        let fallback = FlowKey::from_packet_with_conservative_fallback(&packet).unwrap();
+        assert_eq!(fallback.protocol, 0);
+        assert_eq!(fallback.discriminator, FlowDiscriminator::Network);
     }
 
     #[test]
