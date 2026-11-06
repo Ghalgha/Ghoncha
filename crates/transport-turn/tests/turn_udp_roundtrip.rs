@@ -275,6 +275,19 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
         }
         _ => panic!("expected TURN peer data"),
     }
+
+    // A too-small output buffer is detected after the TURN library has built
+    // the delayed send. The engine must fail closed rather than allow a retry
+    // that could duplicate or silently lose peer data.
+    let mut undersized_buffer = [0u8; 1];
+    assert!(matches!(
+        client.send_to_into(peer_addr, b"payload", now, &mut undersized_buffer),
+        Err(ghoncha_transport_turn::TurnError::BufferTooSmall { .. })
+    ));
+    assert!(matches!(
+        client.poll_transmit(now),
+        Err(ghoncha_transport_turn::TurnError::ProtocolError)
+    ));
 }
 
 struct MockDatagramSocket {
