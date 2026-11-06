@@ -365,7 +365,10 @@ pub enum TurnStreamIoError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TurnTcpQueueError {
     EmptyFrame,
-    FrameTooLarge { maximum: usize, actual: usize },
+    FrameTooLarge {
+        maximum: usize,
+        actual: usize,
+    },
     QueueFull,
     ByteLimitReached {
         maximum: usize,
@@ -374,7 +377,10 @@ pub enum TurnTcpQueueError {
     },
     NoPendingFrame,
     NoProgress,
-    WriteExceedsPending { remaining: usize, attempted: usize },
+    WriteExceedsPending {
+        remaining: usize,
+        attempted: usize,
+    },
 }
 
 /// One encoded TURN wire frame retained across partial TCP writes.
@@ -585,11 +591,11 @@ pub struct TurnTcpDriver<
 }
 
 impl<
-        S: TurnStreamSocket,
-        const CAPACITY: usize,
-        const MAX_FRAME: usize,
-        const MAX_QUEUED_BYTES: usize,
-    > TurnTcpDriver<S, CAPACITY, MAX_FRAME, MAX_QUEUED_BYTES>
+    S: TurnStreamSocket,
+    const CAPACITY: usize,
+    const MAX_FRAME: usize,
+    const MAX_QUEUED_BYTES: usize,
+> TurnTcpDriver<S, CAPACITY, MAX_FRAME, MAX_QUEUED_BYTES>
 {
     /// Takes ownership of a connected stream and creates its TURN state.
     pub fn new(
@@ -689,19 +695,18 @@ impl<
             .ensure_capacity(MAX_FRAME)
             .map_err(TurnTcpDriverError::Queue)?;
 
-        let outbound = match self.engine.send_to_into(
-            peer,
-            payload,
-            now,
-            &mut encoded_buffer[..MAX_FRAME],
-        ) {
-            Ok(outbound) => outbound,
-            Err(error @ TurnTcpError::BufferTooSmall { .. }) => {
-                self.retire();
-                return Err(TurnTcpDriverError::Turn(error));
-            }
-            Err(error) => return Err(TurnTcpDriverError::Turn(error)),
-        };
+        let outbound =
+            match self
+                .engine
+                .send_to_into(peer, payload, now, &mut encoded_buffer[..MAX_FRAME])
+            {
+                Ok(outbound) => outbound,
+                Err(error @ TurnTcpError::BufferTooSmall { .. }) => {
+                    self.retire();
+                    return Err(TurnTcpDriverError::Turn(error));
+                }
+                Err(error) => return Err(TurnTcpDriverError::Turn(error)),
+            };
 
         if let Err(error) = self.queue.push(&encoded_buffer[..outbound.len]) {
             self.retire();
@@ -783,10 +788,8 @@ impl<
     pub fn poll_peer_data(
         &mut self,
         now: MonotonicTime,
-    ) -> Result<
-        Option<turn_client_proto::api::TurnPeerData<alloc::vec::Vec<u8>>>,
-        TurnTcpDriverError,
-    > {
+    ) -> Result<Option<turn_client_proto::api::TurnPeerData<alloc::vec::Vec<u8>>>, TurnTcpDriverError>
+    {
         self.ensure_active()?;
         self.engine
             .poll_peer_data(now)
