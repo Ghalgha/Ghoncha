@@ -187,6 +187,16 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
     );
     deliver_responses(&mut client, server_addr, permission, now);
     assert!(client.have_permission(peer_addr.ip()));
+    let mut saw_permission = false;
+    while let Some(event) = client.poll_event() {
+        if matches!(
+            event,
+            TurnEvent::PermissionCreated(TransportType::Udp, ip) if ip == peer_addr.ip()
+        ) {
+            saw_permission = true;
+        }
+    }
+    assert!(saw_permission);
 
     // ChannelBind switches peer data from Send Indications to ChannelData.
     client.bind_channel(peer_addr, now).unwrap();
