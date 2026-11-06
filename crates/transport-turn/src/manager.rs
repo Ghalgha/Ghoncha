@@ -54,6 +54,15 @@ pub enum AdmissionDecision {
     NoActiveAllocations,
 }
 
+/// Outcome of routing one packet after preserving existing flow affinity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FlowAdmissionDecision {
+    Dispatched(DispatchDecision),
+    OpenAllocation,
+    Backpressure,
+    NoActiveAllocations,
+}
+
 /// Errors when adding or managing an Allocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AllocationManagerError {
@@ -239,28 +248,33 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         }
     }
 
-    /// Assigns a parsed inner flow to one active Allocation.
-    /// Existing flows stay pinned; remapping occurs only after worker loss.
+    /// Keeps existing flows pinned; admits new flows using measured Allocation pressure.
+    /// `effective_maximum` must include server quotas and transport/device limits.
     pub fn dispatch_flow(
         &mut self,
         key: FlowKey,
         now_ns: u64,
-    ) -> Result<DispatchDecision, AllocationManagerError> {
-        let mut workers = [Worker {
-            id: 0,
-            eligible: false,
-        }; CAPACITY];
+        effective_maximum: usize,
+    ) -> Result<FlowAdmissionDecision, AllocationManagerError> {
+        let mut workers = [Worker { id: 0, eligible: false }; CAPACITY];
         let mut count = 0;
         for slot in self.slots.iter().flatten() {
-            workers[count] = Worker {
-                id: slot.id,
-                eligible: slot.state == AllocationState::Active,
-            };
+            workers[count] = Worker { id: slot.id, eligible: slot.state == AllocationState::Active };
             count += 1;
         }
-        self.flow_dispatcher
-            .dispatch(key, now_ns, &workers[..count])
-            .map_err(AllocationManagerError::Dispatch)
+        let eligible = &workers[..count];
+        if let Some(existing) = self.flow_dispatcher.lookup_existing(key, now_ns, eligible) {
+            return Ok(FlowAdmissionDecision::Dispatched(existing));
+        }
+        match self.admit_new_flow(true, effective_maximum) {
+            AdmissionDecision::Use { allocation_id } => self.flow_dispatcher
+                .dispatch_to(key, now_ns, eligible, allocation_id)
+                .map(FlowAdmissionDecision::Dispatched)
+                .map_err(AllocationManagerError::Dispatch),
+            AdmissionDecision::OpenAllocation => Ok(FlowAdmissionDecision::OpenAllocation),
+            AdmissionDecision::Backpressure => Ok(FlowAdmissionDecision::Backpressure),
+            AdmissionDecision::NoActiveAllocations => Ok(FlowAdmissionDecision::NoActiveAllocations),
+        }
     }
 
     /// Expires idle flow entries with an explicit scan budget.
