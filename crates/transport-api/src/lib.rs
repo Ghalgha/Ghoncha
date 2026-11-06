@@ -9,6 +9,9 @@
 mod credentials;
 pub use credentials::*;
 
+mod identity;
+pub use identity::*;
+
 mod rtp;
 pub use rtp::*;
 
