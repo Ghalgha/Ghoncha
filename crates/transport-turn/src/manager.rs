@@ -345,11 +345,11 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         let slot = self.slots[index]
             .as_ref()
             .expect("located slot must be occupied");
-        if slot.state != AllocationState::Deallocating {
-            return Err(AllocationManagerError::NotDeallocating);
-        }
         if slot.load.in_flight_packets != 0 || slot.load.queued_bytes != 0 {
             return Err(AllocationManagerError::PendingWorkRemains);
+        }
+        if slot.state != AllocationState::Deallocating {
+            return Err(AllocationManagerError::NotDeallocating);
         }
         self.flow_dispatcher.forget_worker(id);
         let allocation = self.slots[index]
