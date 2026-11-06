@@ -61,8 +61,7 @@ impl IdleKeepalivePolicy {
     /// Returns the effective interval, or None until a path timeout is known.
     pub fn interval_ns(self) -> Option<u64> {
         let timeout = self.observed_idle_timeout_ns?;
-        let usable = (u128::from(timeout)
-            * u128::from(10_000 - self.safety_margin_basis_points)
+        let usable = (u128::from(timeout) * u128::from(10_000 - self.safety_margin_basis_points)
             / 10_000) as u64;
 
         if usable < self.minimum_interval_ns {
@@ -117,29 +116,25 @@ mod tests {
     #[test]
     fn applies_safety_margin_and_interval_bounds() {
         let policy =
-            IdleKeepalivePolicy::new(Some(30 * SECOND), 5 * SECOND, 60 * SECOND, 2_000)
-                .unwrap();
+            IdleKeepalivePolicy::new(Some(30 * SECOND), 5 * SECOND, 60 * SECOND, 2_000).unwrap();
         assert_eq!(policy.interval_ns(), Some(24 * SECOND));
 
         let capped =
-            IdleKeepalivePolicy::new(Some(120 * SECOND), 5 * SECOND, 45 * SECOND, 1_000)
-                .unwrap();
+            IdleKeepalivePolicy::new(Some(120 * SECOND), 5 * SECOND, 45 * SECOND, 1_000).unwrap();
         assert_eq!(capped.interval_ns(), Some(45 * SECOND));
     }
 
     #[test]
     fn disables_keepalive_when_minimum_cannot_fit_safely() {
         let policy =
-            IdleKeepalivePolicy::new(Some(5 * SECOND), 5 * SECOND, 60 * SECOND, 2_000)
-                .unwrap();
+            IdleKeepalivePolicy::new(Some(5 * SECOND), 5 * SECOND, 60 * SECOND, 2_000).unwrap();
         assert_eq!(policy.interval_ns(), None);
     }
 
     #[test]
     fn uses_one_shot_deadline_and_respects_new_activity() {
         let policy =
-            IdleKeepalivePolicy::new(Some(20 * SECOND), 1 * SECOND, 60 * SECOND, 2_000)
-                .unwrap();
+            IdleKeepalivePolicy::new(Some(20 * SECOND), 1 * SECOND, 60 * SECOND, 2_000).unwrap();
         assert_eq!(
             policy.deadline_after_activity(10 * SECOND),
             Some(26 * SECOND)
