@@ -1,79 +1,98 @@
-# RTP framing and tunnel record security
+# RTP and SRTP security in GHONCHA
 
-## Scope
+## Scope and architectural placement
 
-RTP is a packet format and timing protocol. SRTP is a security profile for RTP/RTCP. An RTP header, sequence number, timestamp, or SSRC does not by itself provide confidentiality, integrity, peer authentication, or replay protection.
+RTP is a packet format and timing protocol. SRTP is the standardized security profile for RTP/RTCP. An RTP header, sequence number, timestamp, or SSRC alone does not provide confidentiality, integrity, peer authentication, or replay protection.
 
-The GHONCHA RTP profile in `crates/transport-api/src/rtp.rs` is framing for one opaque tunnel record. It is not an SRTP implementation. Its 16-bit RTP sequence number is transport metadata and must never be treated as a cryptographic nonce or as the tunnel's replay counter. The tunnel payload may already be protected by an inner protocol; the security layer must document exactly which layer owns encryption and authentication to avoid accidental double encryption or unauthenticated paths.
+GHONCHA has two distinct security layers in its primary VK Calls path:
 
-## Design decision
+1. **Inner WireGuard:** the VPN protocol. It authenticates the VPN peer, establishes tunnel keys, protects IP packets, and provides its own replay protection. This is the authoritative VPN security boundary.
+2. **Outer DTLS-SRTP:** the VK Calls carrier profile. DTLS authenticates the GHONCHA gateway according to the configured identity policy and exports SRTP keying material. SRTP protects RTP packets that carry complete WireGuard datagrams across the TURN relay.
 
-Do not make SRTP a mandatory security layer for GHONCHA. SRTP is specifically defined around RTP/RTCP packet semantics. GHONCHA transports IP packets and must also work over non-RTP carriers, including TURN datagrams, TURN streams, and VK Calls.
+The VK TURN relay forwards opaque SRTP datagrams. It does not terminate the client-to-gateway DTLS-SRTP association, possess WireGuard keys, or act as the VPN gateway.
 
-Instead, define a transport-independent authenticated tunnel-record layer above every carrier:
+SRTP is required by the selected RTP-based VK Calls adapter profile. It is **not** a mandatory security layer for every GHONCHA transport. A future direct UDP or other adapter may carry authenticated WireGuard datagrams without RTP/SRTP, provided its path and threat model are documented. Do not add a second custom tunnel AEAD layer on top of WireGuard without a specific, reviewed protocol requirement.
 
-1. The tunnel security layer accepts a complete inner IP packet and emits one authenticated opaque record.
-2. Carrier adapters transport records and preserve record boundaries; they do not choose keys, construct nonces, or silently downgrade record protection.
-3. On receive, the security layer authenticates a record before exposing its plaintext to the IP data plane.
-4. The same record-security contract applies regardless of whether the carrier is RTP-shaped, UDP, TCP/TLS, or another future adapter.
+## What SRTP does and does not do
 
-If an authenticated inner tunnel protocol already provides the required end-to-end properties, reuse that protection and explicitly document it. Do not add another cryptographic wrapper solely because a carrier uses RTP.
+SRTP provides confidentiality, message authentication/integrity, and replay protection for RTP packets; SRTCP provides the corresponding protection for RTCP. The negotiated SRTP protection profile determines the cipher, authentication tag, key/salt lengths, and packet processing rules.
 
-## Required record protection properties
+SRTP does not replace:
+- DTLS peer authentication and certificate/fingerprint validation;
+- WireGuard peer authentication and VPN packet protection;
+- TURN authentication, permissions, allocation refresh, or relay lifecycle;
+- the GHONCHA transport lifecycle and network-generation checks.
 
-The eventual record protector must use a maintained, audited AEAD implementation rather than a custom AES-CTR/HMAC construction.
+Keep these identities and credentials separate: VK account/call authorization, TURN username/password, DTLS gateway identity, SRTP traffic keys, and WireGuard peer keys.
 
-- **Confidentiality and integrity:** authenticate the complete record header as associated data and encrypt the IP payload.
-- **Directional separation:** derive independent client-to-gateway and gateway-to-client keys.
-- **Nonce uniqueness:** use a monotonic packet counter scoped to a key epoch and direction. Never derive a nonce from the 16-bit RTP sequence number alone.
-- **Session binding:** derive traffic keys from an authenticated handshake and bind them to the peer identity, session, direction, and negotiated protocol version.
-- **Replay protection:** maintain a bounded sliding replay window per receive key context. Authenticate before committing a packet to the replay window. Permit legitimate reordering within the configured window; reject duplicates and packets older than the window.
-- **Rekeying:** rotate keys before algorithm-specific usage limits. A new key epoch is required before resetting any packet counter. Reject stale epochs and never resume an old key/counter pair after network migration.
-- **Failure behavior:** authentication failure, nonce exhaustion, malformed headers, and unsupported key epochs must fail closed. Never pass unauthenticated plaintext to TUN.
-- **Resource bounds:** bound replay-window state, pending key epochs, and any reordering buffers. Do not allocate memory based on unauthenticated lengths.
-- **Key hygiene:** erase traffic keys and intermediate secrets when their session context is retired, where the platform and implementation permit reliable zeroization.
+## DTLS-SRTP integration requirements
 
-For multipath operation, packet counters and replay state must remain correct when records arrive out of order across different allocations. The simplest safe initial design is one logical directional counter and replay window per tunnel key epoch, shared by all carrier paths. If per-allocation subkeys are later introduced, derive them with distinct context labels and keep their replay state separate. Never let two workers encrypt under the same key and nonce.
+- Negotiate the SRTP protection profile using the DTLS-SRTP mechanism (RFC 5764). Do not use a DTLS application-data tunnel after negotiating `use_srtp`; RTP/RTCP media packets are protected with SRTP after the handshake.
+- Validate the DTLS peer identity against authenticated provisioning before accepting exported keying material or sending tunnel data. A successful DTLS handshake alone is not sufficient if certificate validation has been delegated to the application.
+- Export keying material using the exact label, role, profile, key length, and salt length specified by the negotiated DTLS-SRTP profile. Do not hand-split or reinterpret exporter bytes based on assumptions from another profile.
+- Create independent SRTP send and receive contexts with the correct client/server key and salt assignment. Never reuse a sending context's key/SSRC/packet-index state for another sender.
+- Treat every fatal DTLS error as a failed association. Retire the DTLS and SRTP contexts together and establish a fresh authenticated association.
+- Never silently downgrade from DTLS-SRTP to a proprietary wrapper or plaintext RTP. Any alternate profile must be explicit, separately provisioned, and independently reviewed.
+- Keep DTLS-SRTP association state separate from TURN allocation state. A TURN allocation refresh or network handover does not automatically prove that the old DTLS peer path remains valid.
 
-## RTP-specific considerations
+## SRTP implementation requirements
 
-- Keep RTP sequence/timestamp/SSRC fields as carrier metadata only.
-- RTP's 16-bit sequence number wraps. It is not a substitute for a 64-bit tunnel packet counter or key epoch.
-- The RTP profile may remain fixed and minimal for interoperability, but its parser must reject unsupported fields and malformed lengths before exposing payload bytes.
-- If a future adapter uses standards-compliant SRTP, it must implement the negotiated SRTP profile, packet-index rollover, key derivation, authentication, and replay rules from the applicable RFCs. Do not label a proprietary RTP wrapper as SRTP.
-- SRTP's RTP-specific protection does not remove the need for GHONCHA peer authentication and tunnel-session binding.
+Use a maintained, interoperable SRTP implementation rather than implementing packet cryptography in GHONCHA.
 
-## Performance and correctness
+- Prefer an AEAD SRTP profile such as AEAD-AES-128-GCM when supported by both endpoints and the selected implementation. Profile choice must be explicit and measured on target Android devices.
+- Let the SRTP implementation own packet-index/rollover-counter calculation, authentication, and replay-window updates. Do not use the 16-bit RTP sequence number alone as a nonce or replay counter.
+- Authenticate before exposing the RTP payload to the WireGuard transport path.
+- Reject duplicate and stale packets according to the negotiated SRTP replay policy while permitting legitimate packet reordering.
+- Keep SSRC allocation unique per sending context and handle sequence rollover according to SRTP rules.
+- Keep key material out of Debug/Display, logs, crash reports, metrics, and diagnostic events. Require secure zeroization support or a reviewed upstream fix for keying material and context teardown.
+- Bound all packet buffers and queues. Reject malformed or oversized RTP/SRTP packets before they can cause unbounded allocation.
+- Do not interpret SRTP replay protection as a replacement for WireGuard replay protection. Both layers protect different packet domains.
 
-Measure security overhead independently from carrier overhead:
+For multipath or multiple TURN allocations, do not share one SRTP sending context across concurrent writers unless the SRTP library explicitly guarantees safe, unique packet-index allocation. The safer initial model is a distinct DTLS-SRTP/SRTP association per independently established media path, with explicit SSRC and key lifecycle. If one association is intentionally shared across paths, serialize its send context and verify replay-window behavior under cross-path reordering.
 
-- bytes added per record, including framing, nonce/epoch metadata, and AEAD tag;
-- encryption/decryption throughput, CPU time, allocations, and battery impact;
-- p50/p95 latency and jitter under packet loss and reordering;
-- replay-window acceptance under multipath reordering;
-- behavior at key rotation and network handover;
-- packet-size limits after all headers and tags are included.
+## RTP framing in GHONCHA
 
-Do not reduce the TUN MTU to compensate for record overhead. The tunnel packetization layer must segment and reassemble complete inner IP packets within bounded memory and time limits, as specified in [MTU and reassembly](mtu-and-reassembly.md).
+The RTP helper in `crates/transport-api/src/rtp.rs` is a framing/packetization primitive, not a complete SRTP implementation. It must not be described as providing cryptographic protection.
+
+- Keep RTP sequence, timestamp, and SSRC as RTP metadata only.
+- RTP's 16-bit sequence number wraps and is not the WireGuard packet counter or nonce.
+- Validate RTP version, header length, CSRC count, extension and padding lengths, payload bounds, and the configured profile before passing payload to SRTP or the next protocol layer.
+- Keep complete WireGuard datagram boundaries: one RTP payload carries one complete WireGuard datagram in the selected VK profile.
+- Do not pass unauthenticated RTP payload bytes to the WireGuard engine.
+- For non-RTP transports, bypass RTP/SRTP and carry the same WireGuard datagrams using that adapter's explicitly defined framing and security model.
+
+## Performance and correctness testing
+
+Measure DTLS, SRTP, TURN, and WireGuard costs separately where possible:
+
+- DTLS handshake time, retransmissions, and CPU cost;
+- SRTP bytes of overhead per packet, encrypt/decrypt throughput, CPU time, allocations, and battery impact;
+- p50/p95 latency, jitter, loss, and reordering;
+- replay-window behavior during cross-path reordering;
+- sequence rollover and context rekey/re-establishment;
+- certificate/fingerprint mismatch, invalid exporter output, and unsupported profile negotiation;
+- packet-size limits after RTP, SRTP tag, TURN framing, and outer network headers;
+- network handover and TURN allocation replacement without stale key/context reuse.
+
+Do not reduce TUN MTU solely to compensate for RTP/SRTP overhead. The tunnel packetization layer must segment and reassemble complete inner IP packets within bounded memory and time limits, as specified in [MTU and reassembly](mtu-and-reassembly.md).
 
 ## Security test requirements
 
-Before enabling a record protector in a production data path, add deterministic test vectors and tests for:
+Before enabling the VK Calls adapter in a production data path, add deterministic tests for:
 
-- successful round-trip in both directions with distinct keys;
-- modification of every authenticated header field and payload;
-- wrong peer/session/key epoch;
-- duplicate, stale, reordered, and out-of-window records;
-- counter rollover and rekey boundaries;
-- concurrent senders and multipath arrival ordering;
-- truncated, oversized, and malformed records;
-- key erasure on close and network-generation replacement;
-- fuzzing of the record parser and replay-window state machine.
-
-The transport API already models adapters as carriers of opaque authenticated records. Keep cryptographic implementation outside the transport adapters and do not route each packet through Kotlin/FFI.
+- DTLS-SRTP profile negotiation and exact exporter key/salt mapping;
+- successful SRTP protect/unprotect in both directions;
+- certificate/fingerprint mismatch and failed peer authentication;
+- modification of RTP header, payload, and authentication tag;
+- duplicate, stale, reordered, and out-of-window SRTP packets;
+- SSRC collision handling and RTP sequence rollover;
+- malformed/truncated/oversized RTP and SRTP packets;
+- context retirement, key zeroization, and network-generation replacement;
+- WireGuard authentication after successful SRTP unprotection;
+- fuzzing of RTP parsing and the integration boundary.
 
 ## Standards
 
 - [RFC 3711 — The Secure Real-time Transport Protocol (SRTP)](https://www.rfc-editor.org/rfc/rfc3711.html)
+- [RFC 5764 — DTLS Extension to Establish Keys for SRTP](https://www.rfc-editor.org/rfc/rfc5764.html)
 - [RFC 7714 — AES-GCM Authenticated Encryption in SRTP](https://www.rfc-editor.org/rfc/rfc7714.html)
-- [RFC 9335 — Completely Encrypting RTP Header Extensions and Contributing Sources](https://www.rfc-editor.org/rfc/rfc9335.html)
