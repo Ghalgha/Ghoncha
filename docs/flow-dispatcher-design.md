@@ -1,6 +1,6 @@
 # GHONCHA flow dispatcher design
 
-Status: design specification; no multi-allocation dispatcher is implemented yet.
+Status: stable flow-affinity core implemented as a bounded, allocation-free Rust crate. It is not yet connected to the TURN multi-allocation runtime; weighted placement, flowlet migration, and live rebalancing remain unimplemented.
 
 ## Objective
 
@@ -135,4 +135,4 @@ Before enabling adaptive dispatch in a user build:
 6. Prototype flowlet migration behind an experimental feature flag.
 7. Enable adaptive migration by default only after benchmark and real-device gates pass.
 
-Until then, stable flow affinity is the correctness baseline. More allocations must never be presented as proof of effective parallelism.
+The current `ghoncha-flow-dispatch` crate implements bounded stable affinity, rendezvous placement for new flows, worker-loss remapping, budgeted idle expiry, and basic scheduler counters. It intentionally does not rebalance healthy live flows or perform weighted placement. The crate is not yet wired into a multi-allocation TURN data plane. More allocations must never be presented as proof of effective parallelism.
