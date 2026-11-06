@@ -37,6 +37,14 @@ pub enum TurnError {
     BufferTooSmall { required: usize },
 }
 
+/// Address families requested for a TURN relay allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnRelayFamilies {
+    Ipv4Only,
+    Ipv6Only,
+    DualStack,
+}
+
 /// A datagram that the caller must send to the TURN server.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OutboundDatagram {
@@ -56,20 +64,38 @@ pub struct TurnUdpEngine {
 }
 
 impl TurnUdpEngine {
-    /// Creates a TURN UDP client state machine.
+    /// Creates a TURN UDP client state machine using IPv4 relay allocation.
     ///
-    /// The socket must already be bound to the selected network. On Android,
-    /// bind it to the active Network and call VpnService.protect() before
-    /// sending the first datagram.
-    ///
-    /// Both address families are requested. SHA-256 integrity is preferred;
-    /// SHA-1 remains enabled for TURN servers that require legacy
-    /// MESSAGE-INTEGRITY.
+    /// IPv4-only is the conservative default to avoid an unnecessary second
+    /// relay allocation. Use new_with_relay_families when the selected peer
+    /// requires IPv6 or dual-stack relay addresses.
     pub fn new(
         local_addr: SocketAddr,
         server_addr: SocketAddr,
         username: &str,
         password: &str,
+    ) -> Result<Self, TurnError> {
+        Self::new_with_relay_families(
+            local_addr,
+            server_addr,
+            username,
+            password,
+            TurnRelayFamilies::Ipv4Only,
+        )
+    }
+
+    /// Creates a TURN UDP client with an explicit relay address-family policy.
+    ///
+    /// The socket must already be bound to the selected network. On Android,
+    /// bind it to the active Network and call VpnService.protect() before
+    /// sending the first datagram. SHA-1 remains preferred for compatibility
+    /// with deployed TURN servers; SHA-256 is retained as an alternative.
+    pub fn new_with_relay_families(
+        local_addr: SocketAddr,
+        server_addr: SocketAddr,
+        username: &str,
+        password: &str,
+        relay_families: TurnRelayFamilies,
     ) -> Result<Self, TurnError> {
         if local_addr.port() == 0 {
             return Err(TurnError::InvalidLocalPort);
@@ -83,9 +109,20 @@ impl TurnUdpEngine {
 
         let credentials = TurnCredentials::new(username, password);
         let mut config = TurnConfig::new(credentials);
-        config.add_address_family(AddressFamily::IPV6);
-        config.set_supported_integrity(IntegrityAlgorithm::Sha256);
-        config.add_supported_integrity(IntegrityAlgorithm::Sha1);
+        config.set_allocation_transport(TransportType::Udp);
+        match relay_families {
+            TurnRelayFamilies::Ipv4Only => {
+                config.set_address_family(AddressFamily::IPV4);
+            }
+            TurnRelayFamilies::Ipv6Only => {
+                config.set_address_family(AddressFamily::IPV6);
+            }
+            TurnRelayFamilies::DualStack => {
+                config.set_address_family(AddressFamily::IPV4);
+                config.add_address_family(AddressFamily::IPV6);
+            }
+        }
+        config.add_supported_integrity(IntegrityAlgorithm::Sha256);
 
         let client = TurnClientUdp::allocate(local_addr, server_addr, config);
 
