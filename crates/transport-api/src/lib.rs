@@ -9,6 +9,9 @@
 mod credentials;
 pub use credentials::*;
 
+mod rtp;
+pub use rtp::*;
+
 /// Stable, implementation-defined transport identifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TransportId(pub &'static str);
