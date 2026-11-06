@@ -77,6 +77,73 @@ pub struct FlowPlan {
     pub supports_live_resize: bool,
 }
 
+/// The currently selected profile and its monotonic command revision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProfileSelection {
+    profile: ConnectionProfile,
+    revision: u64,
+}
+
+/// A successfully accepted profile selection change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProfileSelectionChange {
+    pub previous: ConnectionProfile,
+    pub selected: ConnectionProfile,
+    pub revision: u64,
+}
+
+/// A stale or repeated profile command.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProfileSelectionError {
+    StaleRevision,
+}
+
+impl ProfileSelection {
+    /// Creates the initial selection before the VPN session starts.
+    pub const fn new(profile: ConnectionProfile) -> Self {
+        Self {
+            profile,
+            revision: 0,
+        }
+    }
+
+    pub const fn profile(self) -> ConnectionProfile {
+        self.profile
+    }
+
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    /// Accepts only a strictly newer user command.
+    ///
+    /// Revisions let the control plane discard late asynchronous work from an
+    /// earlier selection when the user changes profiles repeatedly.
+    pub fn select(
+        &mut self,
+        revision: u64,
+        profile: ConnectionProfile,
+    ) -> Result<ProfileSelectionChange, ProfileSelectionError> {
+        if revision <= self.revision {
+            return Err(ProfileSelectionError::StaleRevision);
+        }
+
+        let change = ProfileSelectionChange {
+            previous: self.profile,
+            selected: profile,
+            revision,
+        };
+        self.profile = profile;
+        self.revision = revision;
+        Ok(change)
+    }
+
+    /// Returns whether an asynchronous result still belongs to the latest command.
+    pub const fn is_current(self, revision: u64) -> bool {
+        self.revision == revision
+    }
+}
+
 /// Errors produced when resolving a profile against transport capabilities.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FlowPlanError {
@@ -295,6 +362,26 @@ mod tests {
         idle_for_ns: 0,
         shrink_after_idle_ns: 5_000_000_000,
     };
+
+    #[test]
+    fn profile_selection_rejects_stale_commands() {
+        let mut selection = ProfileSelection::new(ConnectionProfile::EnergySaving);
+        let change = selection.select(1, ConnectionProfile::Standard).unwrap();
+
+        assert_eq!(change.previous, ConnectionProfile::EnergySaving);
+        assert_eq!(change.selected, ConnectionProfile::Standard);
+        assert_eq!(selection.profile(), ConnectionProfile::Standard);
+        assert_eq!(selection.revision(), 1);
+        assert!(selection.is_current(1));
+        assert_eq!(
+            selection.select(1, ConnectionProfile::Unlimited),
+            Err(ProfileSelectionError::StaleRevision)
+        );
+        assert_eq!(
+            selection.select(0, ConnectionProfile::Unlimited),
+            Err(ProfileSelectionError::StaleRevision)
+        );
+    }
 
     #[test]
     fn unlimited_starts_small_and_scales_on_measured_marginal_gain() {
