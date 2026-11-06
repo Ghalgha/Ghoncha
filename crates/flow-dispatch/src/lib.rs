@@ -172,11 +172,12 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
         for _ in 0..scan {
             let index = self.expiry_cursor;
             self.expiry_cursor = (self.expiry_cursor + 1) % CAPACITY;
-            if let Some(entry) = self.entries[index] {
-                if now_ns >= entry.last_seen_ns && now_ns - entry.last_seen_ns >= idle_timeout_ns {
-                    self.entries[index] = None;
-                    expired += 1;
-                }
+            if let Some(entry) = self.entries[index]
+                && now_ns >= entry.last_seen_ns
+                && now_ns - entry.last_seen_ns >= idle_timeout_ns
+            {
+                self.entries[index] = None;
+                expired += 1;
             }
         }
 
