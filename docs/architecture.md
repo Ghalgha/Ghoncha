@@ -23,7 +23,7 @@ Status: design baseline; implementation choices remain subject to interoperabili
 
 Use the standard WireGuard protocol as the initial protocol candidate; do not invent a GHONCHA-specific handshake, KDF, nonce format, replay window, or AEAD construction.
 
-WireGuard provides authenticated key establishment and transport protection. The relay sees only WireGuard datagrams and TURN metadata. The gateway is the cryptographic endpoint. TURN authentication protects access to relay resources; it is not a substitute for VPN peer authentication.
+WireGuard is the inner VPN protocol and remains the authoritative identity and IP-packet protection layer. On the primary VK Calls path, the WireGuard datagram is carried as application data inside a separate client-to-gateway DTLS association; TURN transports the resulting DTLS datagrams to the gateway UDP peer socket. The VK relay sees DTLS records and TURN metadata, not the inner WireGuard packet. The gateway terminates DTLS, validates its configured peer identity, extracts the WireGuard datagram, and passes it to the WireGuard endpoint. DTLS credentials and TURN credentials are not WireGuard keys. TURN authentication only protects access to relay resources.
 
 The exact Rust WireGuard engine is **not selected yet**. Cloudflare BoringTun is a candidate because it is a Rust userspace implementation with Android targets, but its 0.7.1 release has a reported open session regression and other protocol-conformance concerns that require investigation. Do not pin or integrate it until those reports are triaged and interoperability, fuzzing, and performance tests pass. The old `wireguard-rs` repository is not an acceptable production dependency: its own documentation says it is incomplete and should not be used.
 
@@ -33,28 +33,29 @@ Initial gateway evaluation should include the mature Linux kernel WireGuard impl
 
 ### Preferred: TURN over UDP
 
-1. The client establishes a TURN UDP allocation and authenticates using the configured TURN credential mechanism.
-2. It creates a permission and, when beneficial, a channel binding for the gateway peer address.
-3. The tunnel engine produces a standard WireGuard transport or handshake datagram.
-4. The TURN client sends that datagram using TURN Send Indication or ChannelData.
-5. The TURN relay forwards the datagram to the gateway's UDP endpoint without decrypting or modifying the WireGuard payload.
-6. The gateway's WireGuard endpoint authenticates and decrypts it, then routes the inner IP packet.
-7. The gateway sends the encrypted WireGuard response to the client's relayed transport address; TURN forwards it to the client.
+1. The client establishes a TURN UDP allocation and authenticates using short-lived credentials obtained from the user-authorized VK Calls provider.
+2. It creates a permission and, when beneficial, a channel binding for the GHONCHA gateway's public UDP peer address.
+3. The WireGuard engine produces a standard WireGuard transport or handshake datagram.
+4. The VK transport adapter places that datagram in the application-data channel of the authenticated GHONCHA DTLS association.
+5. The TURN client sends the resulting DTLS datagram to the gateway peer using TURN Send Indication or ChannelData.
+6. The VK TURN relay forwards the opaque DTLS datagram to the gateway's UDP peer socket without terminating DTLS or seeing the inner WireGuard packet.
+7. The gateway validates/terminates DTLS, extracts the WireGuard datagram, and passes it to the WireGuard endpoint for peer authentication and IP decapsulation.
+8. The gateway wraps the WireGuard response in DTLS application data and sends the resulting datagram to the client's relayed transport address; TURN forwards it to the client.
 
 The gateway must treat the relay address as the observed network endpoint, not as the client's identity. Peer identity comes from WireGuard cryptographic authentication and server-side peer configuration.
 
 ### Fallback: TURN over TCP or TLS over TCP
 
-RFC 8656 permits TCP or TLS over TCP between client and TURN server while the TURN server relays UDP to the peer. This is a compatibility fallback for networks that block UDP, not a performance mode. TCP head-of-line blocking and retransmission latency can severely affect interactive traffic. The client should prefer UDP, detect path failure with bounded timeouts, and expose the active transport in diagnostics.
+RFC 8656 permits TCP or TLS over TCP between the client and TURN server while the TURN server relays UDP to the gateway peer. This changes only the client-to-relay carrier: TURN still delivers the DTLS application datagram to the gateway's UDP socket. It is a compatibility fallback for networks that block UDP, not a performance mode. TCP head-of-line blocking and retransmission latency can severely affect interactive traffic. The client should prefer TURN/UDP, detect path failure with bounded timeouts, and expose the active outer transport in diagnostics.
 
 TURN ChannelData framing preserves datagram boundaries at the TURN layer. Do not concatenate raw WireGuard packets into an undocumented byte stream. Follow RFC 8656 framing, padding, channel lifetime, permission lifetime, and allocation refresh rules exactly.
 
-DTLS-over-UDP is defined by RFC 8656 but should not be assumed to be universally available on TURN servers. Evaluate it as an optional authenticated TURN transport only after interoperability testing; it does not replace WireGuard end-to-end protection.
+Do not confuse the application-level DTLS association between GHONCHA client and gateway with TURN-over-DTLS (DTLS between the TURN client and the TURN server), which RFC 8656 also defines as an optional client-to-relay transport. The VK reference topology uses TURN/UDP to the relay and a separate DTLS association to the gateway. TURN-over-DTLS is a distinct optional mode and must be evaluated independently; neither DTLS mode replaces WireGuard peer authentication.
 
 ## MTU and packet sizing
 
 - Derive the effective TUN MTU from the actual path MTU and all outer encapsulation overheads.
-- Account for IP, UDP, TURN ChannelData/Send Indication, and WireGuard overhead. TLS/TCP fallback has different framing and congestion behavior.
+- Account for IP, UDP, TURN ChannelData/Send Indication, application-level DTLS, and WireGuard overhead. TURN TCP/TLS fallback has different framing and congestion behavior.
 - Avoid IP fragmentation. Prefer a conservative initial MTU and implement path-MTU tests before enabling larger values.
 - Never silently truncate an inner packet. Reject oversize packets with a measurable reason and use correct ICMP/PMTU behavior where supported.
 - Test IPv4 and IPv6 independently, including cellular networks and transitions between networks.
@@ -69,7 +70,7 @@ DTLS-over-UDP is defined by RFC 8656 but should not be assumed to be universally
 
 ## Reliability and security requirements
 
-- Authenticate the gateway identity and TURN service independently.
+- Authenticate the GHONCHA DTLS peer identity, WireGuard peer identity, and TURN service independently.
 - Store long-term private keys using Android Keystore-backed protection where feasible; never log secrets or raw key material.
 - Enforce replay protection, key rotation, handshake rate limits, peer authorization, and strict per-peer resource limits using the selected WireGuard implementation.
 - Treat TURN responses, network changes, peer addresses, and all packet input as untrusted.
@@ -81,7 +82,7 @@ DTLS-over-UDP is defined by RFC 8656 but should not be assumed to be universally
 
 1. WireGuard interoperability against the official implementation and independent peers.
 2. Fuzzing and malformed-packet tests for packet, TURN, and tunnel boundaries.
-3. TURN UDP, TCP, TLS, and optional DTLS interoperability against more than one server implementation.
+3. TURN UDP, TCP, and TLS interoperability against more than one server implementation, plus separate application-level DTLS client/gateway interoperability and peer-pinning tests.
 4. NAT rebinding, Wi-Fi/cellular handover, IPv4/IPv6, DNS, sleep/wake, and allocation expiry tests.
 5. Benchmarks on real Android devices: throughput, RTT, jitter, loss, CPU, thermal behavior, memory, and battery consumption.
 6. Gateway load tests, abuse limits, failure recovery, and operational observability without sensitive payload logging.
