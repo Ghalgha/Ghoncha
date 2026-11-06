@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use ghoncha_transport_api::MonotonicTime;
 use ghoncha_transport_turn::TurnUdpEngine;
-use turn_client_proto::udp::{TurnEvent, TurnPollRet, TurnRecvRet};
 use turn_client_proto::types::Instant;
+use turn_client_proto::udp::{TurnEvent, TurnPollRet, TurnRecvRet};
 use turn_server_proto::api::{TurnServerApi, TurnServerPollRet};
 use turn_server_proto::server::TurnServer;
 use turn_server_proto::stun::agent::Transmit;
@@ -232,7 +232,7 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
         .build();
     assert_eq!(forwarded.from, relay_v4);
     assert_eq!(forwarded.to, peer_addr);
-    assert_eq!(forwarded.data, payload);
+    assert_eq!(forwarded.data.as_slice(), payload.as_slice());
 
     // Peer -> client: the TURN client returns a borrowed peer payload.
     let peer_payload = b"ghoncha-pong";
@@ -255,7 +255,7 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
     {
         TurnRecvRet::PeerData(peer_data) => {
             assert_eq!(peer_data.peer, peer_addr);
-            assert_eq!(peer_data.data(), peer_payload);
+            assert_eq!(peer_data.data(), peer_payload.as_slice());
         }
         _ => panic!("expected TURN peer data"),
     }
