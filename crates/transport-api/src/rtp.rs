@@ -96,18 +96,8 @@ impl<'a> RtpRecord<'a> {
         Ok(Self {
             header: RtpRecordHeader {
                 sequence_number: u16::from_be_bytes([datagram[2], datagram[3]]),
-                timestamp: u32::from_be_bytes([
-                    datagram[4],
-                    datagram[5],
-                    datagram[6],
-                    datagram[7],
-                ]),
-                ssrc: u32::from_be_bytes([
-                    datagram[8],
-                    datagram[9],
-                    datagram[10],
-                    datagram[11],
-                ]),
+                timestamp: u32::from_be_bytes([datagram[4], datagram[5], datagram[6], datagram[7]]),
+                ssrc: u32::from_be_bytes([datagram[8], datagram[9], datagram[10], datagram[11]]),
             },
             payload,
         })
