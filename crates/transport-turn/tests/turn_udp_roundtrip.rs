@@ -37,8 +37,8 @@ fn exchange_client_request(
     let incoming = Transmit::new(
         outgoing.data.as_ref(),
         TransportType::Udp,
-        server_addr,
         client_addr,
+        server_addr,
     );
 
     let mut responses = Vec::new();
@@ -223,8 +223,8 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
             Transmit::new(
                 &outbound_buffer[..outbound.len],
                 TransportType::Udp,
-                server_addr,
                 client_addr,
+                server_addr,
             ),
             instant(now),
         )
@@ -241,8 +241,8 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
             Transmit::new(
                 peer_payload.as_slice(),
                 TransportType::Udp,
-                relay_v4,
                 peer_addr,
+                relay_v4,
             ),
             instant(now),
         )
