@@ -722,12 +722,11 @@ mod tests {
                 MonotonicTime(1),
             )
             .unwrap();
-        assert_eq!(
+        assert!(matches!(
             result,
-            TurnReceiveResult::Ignored {
-                from: "203.0.113.9:3478".parse().unwrap(),
-            }
-        );
+            TurnReceiveResult::Ignored { from }
+                if from == "203.0.113.9:3478".parse().unwrap()
+        ));
     }
 
     #[test]
