@@ -380,7 +380,7 @@ mod tests {
         );
 
         transport.close(CloseReason::UserRequest);
-        transport.close(CloseReason::Shutdown);
+        transport.close(CloseReason::InternalFailure);
         assert_eq!(transport.state(), TransportState::Closed);
     }
 
