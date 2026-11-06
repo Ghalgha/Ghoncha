@@ -347,6 +347,66 @@ impl TurnDatagramSocket for MockDatagramSocket {
 }
 
 #[test]
+fn readiness_pump_respects_budgets_and_would_block() {
+    let client_addr: SocketAddr = "192.0.2.15:40005".parse().unwrap();
+    let server_addr: SocketAddr = "198.51.100.15:3478".parse().unwrap();
+    let socket = MockDatagramSocket {
+        local: client_addr,
+        sent: Vec::new(),
+        inbound: VecDeque::new(),
+        block_next_send: true,
+        fail_next_send: false,
+        fail_next_receive: false,
+        truncate_next_receive: false,
+    };
+
+    let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
+        socket,
+        server_addr,
+        "ghoncha-test-user",
+        "ghoncha-test-pass",
+    )
+    .unwrap();
+    assert!(driver.poll_control(MonotonicTime(0)).unwrap());
+
+    let mut receive_buffer = [0u8; 256];
+    let blocked = driver
+        .service_ready(
+            true,
+            true,
+            MonotonicTime(1),
+            &mut receive_buffer,
+            8,
+            8,
+            |_| {},
+        )
+        .unwrap();
+    assert_eq!(blocked.sent_datagrams, 0);
+    assert_eq!(blocked.received_datagrams, 0);
+    assert!(blocked.read_would_block);
+    assert!(blocked.write_would_block);
+    assert_eq!(driver.queued_control(), 1);
+
+    let progress = driver
+        .service_ready(
+            false,
+            true,
+            MonotonicTime(2),
+            &mut receive_buffer,
+            0,
+            1,
+            |_| {},
+        )
+        .unwrap();
+    assert_eq!(progress.sent_datagrams, 1);
+    assert_eq!(driver.queued_control(), 0);
+
+    let (socket, _, _) = driver.into_parts();
+    assert_eq!(socket.sent.len(), 1);
+    assert_eq!(socket.sent[0].0, server_addr);
+}
+
+#[test]
 fn socket_owning_driver_retains_control_datagram_across_would_block() {
     let client_addr: SocketAddr = "192.0.2.10:40000".parse().unwrap();
     let server_addr: SocketAddr = "198.51.100.10:3478".parse().unwrap();
