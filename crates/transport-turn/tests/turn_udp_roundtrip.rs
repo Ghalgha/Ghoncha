@@ -336,6 +336,12 @@ fn socket_owning_driver_retains_control_datagram_across_would_block() {
     assert!(driver.poll_control(MonotonicTime(0)).unwrap());
     assert_eq!(driver.queued_control(), 1);
 
+    // Extraction must return the intact driver while a control datagram is pending.
+    let mut driver = match driver.try_into_parts() {
+        Ok(_) => panic!("driver with queued control traffic must not be extracted"),
+        Err(driver) => driver,
+    };
+
     assert!(matches!(
         driver.flush_one().unwrap(),
         DatagramFlushResult::WouldBlock {
@@ -354,7 +360,7 @@ fn socket_owning_driver_retains_control_datagram_across_would_block() {
     ));
     assert_eq!(driver.queued_control(), 0);
 
-    let (socket, _engine) = driver.into_parts();
+    let (socket, _engine) = driver.try_into_parts().expect("queues should be empty");
     assert_eq!(socket.sent.len(), 1);
     assert_eq!(socket.sent[0].0, server_addr);
     assert!(!socket.sent[0].1.is_empty());
