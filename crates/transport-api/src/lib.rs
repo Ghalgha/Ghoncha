@@ -1,0 +1,245 @@
+#![no_std]
+
+//! Runtime-neutral interfaces shared by GHONCHA transport adapters.
+//!
+//! This crate deliberately contains no sockets, async runtime, VK integration,
+//! TURN implementation, cryptographic implementation, or packet parser.
+//! Adapters exchange opaque authenticated tunnel records with the caller.
+
+/// Stable, implementation-defined transport identifier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransportId(pub &'static str);
+
+/// How a transport preserves record boundaries on its underlying network path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordFraming {
+    /// The underlying path preserves datagram boundaries.
+    Datagram,
+    /// The adapter frames records over a byte stream.
+    LengthPrefixedStream,
+}
+
+/// Delivery behavior visible to the tunnel layer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeliverySemantics {
+    /// Records may be lost, duplicated, or reordered.
+    BestEffort,
+    /// Records are delivered reliably and in order by the adapter.
+    ReliableOrdered,
+    /// Delivery behavior is specific to the adapter and must be documented.
+    AdapterDefined,
+}
+
+/// Network protocol used by an adapter to reach its next hop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkProtocol {
+    Udp,
+    Tcp,
+    Tls,
+    Dtls,
+    Quic,
+    Other,
+}
+
+/// Address-family support advertised by an adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AddressFamilies(u8);
+
+impl AddressFamilies {
+    pub const NONE: Self = Self(0);
+    pub const IPV4: Self = Self(1);
+    pub const IPV6: Self = Self(2);
+    pub const IPV4_AND_IPV6: Self = Self(3);
+
+    pub const fn supports_ipv4(self) -> bool {
+        self.0 & Self::IPV4.0 != 0
+    }
+
+    pub const fn supports_ipv6(self) -> bool {
+        self.0 & Self::IPV6.0 != 0
+    }
+}
+
+/// Immutable capabilities used by transport selection and diagnostics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransportCapabilities {
+    pub framing: RecordFraming,
+    pub delivery: DeliverySemantics,
+    pub max_record_size: u32,
+    pub address_families: AddressFamilies,
+    pub network_protocol: NetworkProtocol,
+    pub supports_network_migration: bool,
+    pub requires_keepalive: bool,
+    pub requires_external_credentials: bool,
+}
+
+impl TransportCapabilities {
+    /// Returns whether this adapter can carry a record of the given size.
+    pub const fn supports_record_size(self, size: usize) -> bool {
+        size <= self.max_record_size as usize
+    }
+}
+
+/// Monotonic time in nanoseconds from an implementation-defined origin.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MonotonicTime(pub u64);
+
+/// Per-iteration limits. Adapters must not exceed either budget.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IoBudget {
+    pub max_events: u16,
+    pub max_bytes: u32,
+}
+
+/// Lifecycle of one adapter instance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportState {
+    Idle,
+    Preparing,
+    Establishing,
+    Ready,
+    Degraded,
+    Recovering,
+    Closing,
+    Closed,
+    Failed,
+}
+
+/// Parameters common to all transport adapters.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransportConfig {
+    /// Monotonically increasing Android/Rust network generation.
+    pub network_generation: u64,
+    /// Maximum accepted GHONCHA record size for this session.
+    pub max_record_size: u32,
+}
+
+/// Result of advancing timers, socket readiness and protocol state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PollOutcome {
+    pub work_done: u16,
+    pub state: TransportState,
+    /// Earliest time at which the adapter needs another timer-driven poll.
+    pub next_deadline: Option<MonotonicTime>,
+}
+
+/// Result of attempting to enqueue one complete record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SendOutcome {
+    Accepted,
+    Backpressure,
+}
+
+/// Result of receiving one complete record into caller-owned memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReceiveOutcome {
+    Record { len: usize },
+    WouldBlock,
+    /// The next record remains queued; retry with a buffer of at least this size.
+    BufferTooSmall { required: usize },
+}
+
+/// Reasons for an explicit, idempotent adapter shutdown.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CloseReason {
+    UserRequest,
+    NetworkChanged,
+    CredentialsExpired,
+    ProviderRevoked,
+    PeerRejected,
+    RetryBudgetExhausted,
+    InternalFailure,
+}
+
+/// Errors with stable, non-secret diagnostic categories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportError {
+    InvalidConfiguration,
+    NotStarted,
+    AlreadyStarted,
+    RecordTooLarge,
+    InvalidState,
+    NetworkGenerationMismatch,
+    AuthenticationFailed,
+    PeerIdentityMismatch,
+    ProtocolViolation,
+    ResourceLimit,
+    IoFailure,
+}
+
+/// Runtime-neutral contract for an adapter that transports opaque GHONCHA records.
+///
+/// Implementations must preserve record boundaries, enforce configured size
+/// limits, bound all internal queues, and associate asynchronous work with the
+/// active network generation. send_record and receive_record are called from
+/// the Rust data plane; they must never be bridged to Kotlin per record.
+pub trait RecordTransport {
+    fn id(&self) -> TransportId;
+
+    fn capabilities(&self) -> TransportCapabilities;
+
+    fn state(&self) -> TransportState;
+
+    /// Starts asynchronous setup. Progress is observed through poll.
+    fn start(&mut self, config: TransportConfig) -> Result<(), TransportError>;
+
+    /// Advances protocol timers and I/O readiness by at most budget.
+    fn poll(
+        &mut self,
+        now: MonotonicTime,
+        budget: IoBudget,
+    ) -> Result<PollOutcome, TransportError>;
+
+    /// Enqueues one complete record or reports backpressure.
+    fn send_record(&mut self, record: &[u8]) -> Result<SendOutcome, TransportError>;
+
+    /// Receives one complete record without allocating.
+    ///
+    /// BufferTooSmall must not consume or truncate the queued record.
+    fn receive_record(&mut self, output: &mut [u8]) -> Result<ReceiveOutcome, TransportError>;
+
+    /// Stops the adapter and releases sockets/allocations. Must be idempotent.
+    fn close(&mut self, reason: CloseReason);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn address_family_flags_are_independent() {
+        assert!(AddressFamilies::IPV4_AND_IPV6.supports_ipv4());
+        assert!(AddressFamilies::IPV4_AND_IPV6.supports_ipv6());
+        assert!(AddressFamilies::IPV4.supports_ipv4());
+        assert!(!AddressFamilies::IPV4.supports_ipv6());
+        assert!(!AddressFamilies::NONE.supports_ipv4());
+        assert!(!AddressFamilies::NONE.supports_ipv6());
+    }
+
+    #[test]
+    fn record_size_limit_is_inclusive() {
+        let capabilities = TransportCapabilities {
+            framing: RecordFraming::Datagram,
+            delivery: DeliverySemantics::BestEffort,
+            max_record_size: 1200,
+            address_families: AddressFamilies::IPV4_AND_IPV6,
+            network_protocol: NetworkProtocol::Udp,
+            supports_network_migration: false,
+            requires_keepalive: true,
+            requires_external_credentials: true,
+        };
+
+        assert!(capabilities.supports_record_size(0));
+        assert!(capabilities.supports_record_size(1200));
+        assert!(!capabilities.supports_record_size(1201));
+    }
+
+    #[test]
+    fn stream_framing_is_distinct_from_reliable_delivery() {
+        let framing = RecordFraming::LengthPrefixedStream;
+        let delivery = DeliverySemantics::ReliableOrdered;
+
+        assert_eq!(framing, RecordFraming::LengthPrefixedStream);
+        assert_eq!(delivery, DeliverySemantics::ReliableOrdered);
+    }
+}
