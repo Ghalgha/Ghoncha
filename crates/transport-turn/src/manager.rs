@@ -73,6 +73,7 @@ pub enum AllocationManagerError {
     UnknownAllocation,
     NotDraining,
     NotDeallocating,
+    DeallocationNotConfirmed,
     PendingWorkRemains,
     Dispatch(DispatchError),
 }
@@ -83,6 +84,7 @@ pub struct ManagedAllocation {
     engine: TurnUdpEngine,
     state: AllocationState,
     load: AllocationLoad,
+    deallocation_confirmed: bool,
 }
 
 impl ManagedAllocation {
@@ -183,6 +185,7 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
             engine,
             state: AllocationState::Active,
             load: AllocationLoad::IDLE,
+            deallocation_confirmed: false,
         });
         self.len += 1;
         Ok(())
@@ -331,11 +334,27 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         Ok(())
     }
 
+    /// Records the server's successful response to the TURN Delete transaction.
+    ///
+    /// Do not call this merely because Delete was queued or sent. The runtime
+    /// must observe a successful protocol result before releasing the slot.
+    pub fn confirm_deallocation(&mut self, id: u16) -> Result<(), AllocationManagerError> {
+        let slot = self
+            .get_mut(id)
+            .ok_or(AllocationManagerError::UnknownAllocation)?;
+        if slot.state != AllocationState::Deallocating {
+            return Err(AllocationManagerError::NotDeallocating);
+        }
+        slot.deallocation_confirmed = true;
+        Ok(())
+    }
+
     /// Removes an Allocation only after its TURN deallocation was resolved.
     ///
     /// The caller must first call begin_deallocation, drive engine_mut().delete()
-    /// and its outbound/response lifecycle, then call this method. The slot
-    /// continues to count against capacity until this final step.
+    /// and its outbound/response lifecycle, call confirm_deallocation after a
+    /// successful server response, then call this method. The slot continues
+    /// to count against capacity until this final step.
     pub fn take_drained(&mut self, id: u16) -> Result<TurnUdpEngine, AllocationManagerError> {
         let index = self
             .slots
@@ -350,6 +369,9 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         }
         if slot.state != AllocationState::Deallocating {
             return Err(AllocationManagerError::NotDeallocating);
+        }
+        if !slot.deallocation_confirmed {
+            return Err(AllocationManagerError::DeallocationNotConfirmed);
         }
         self.flow_dispatcher.forget_worker(id);
         let allocation = self.slots[index]
@@ -539,6 +561,7 @@ mod tests {
         ));
         manager.update_load(1, AllocationLoad::IDLE).unwrap();
         manager.begin_deallocation(1).unwrap();
+        manager.confirm_deallocation(1).unwrap();
         let returned = manager.take_drained(1).unwrap();
         assert_eq!(returned.local_addr().port(), 40001);
         assert!(manager.is_empty());
@@ -582,6 +605,7 @@ mod tests {
         assert_eq!(second.kind, DispatchKind::AffinityHit);
         manager.begin_drain(7).unwrap();
         manager.begin_deallocation(7).unwrap();
+        manager.confirm_deallocation(7).unwrap();
         manager.take_drained(7).unwrap();
         manager.insert(7, engine(40008)).unwrap();
         let after_reuse = manager.dispatch_flow(flow_key(), 3, 2).unwrap();
@@ -692,6 +716,27 @@ mod tests {
     }
 
     #[test]
+    fn allocation_slot_is_not_released_before_server_delete_confirmation() {
+        let mut manager = TurnAllocationManager::<1>::new();
+        manager.insert(1, engine(40001)).unwrap();
+        manager.begin_drain(1).unwrap();
+        manager.begin_deallocation(1).unwrap();
+
+        assert!(matches!(
+            manager.take_drained(1),
+            Err(AllocationManagerError::DeallocationNotConfirmed)
+        ));
+        assert_eq!(
+            manager.admit_new_flow(true, 1),
+            AdmissionDecision::Backpressure
+        );
+
+        manager.confirm_deallocation(1).unwrap();
+        manager.take_drained(1).unwrap();
+        assert!(manager.is_empty());
+    }
+
+    #[test]
     fn unhealthy_allocation_can_be_retired_after_pending_work_is_resolved() {
         let mut manager = TurnAllocationManager::<1>::new();
         manager.insert(1, engine(40001)).unwrap();
@@ -715,6 +760,7 @@ mod tests {
         ));
         manager.update_load(1, AllocationLoad::IDLE).unwrap();
         manager.begin_deallocation(1).unwrap();
+        manager.confirm_deallocation(1).unwrap();
         let retired = manager.take_drained(1).unwrap();
         assert_eq!(retired.local_addr().port(), 40001);
         assert!(manager.is_empty());
