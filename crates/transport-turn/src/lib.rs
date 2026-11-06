@@ -1564,7 +1564,6 @@ mod tests {
     }
 }
 
-
 /// Error returned by the bounded TURN timer scheduler.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TurnReactorError {
