@@ -1093,7 +1093,7 @@ mod stream_framing_tests {
         assert!(!queue.advance_written(3).unwrap());
         assert_eq!(
             queue.front().unwrap(),
-            &[0, 5, b'f', b'i', b'r', b's', b't']
+            &[5, b'f', b'i', b'r', b's', b't']
         );
         assert!(!queue.advance_written(2).unwrap());
         assert_eq!(queue.front().unwrap(), b"first");
@@ -1110,7 +1110,7 @@ mod stream_framing_tests {
 
     #[test]
     fn send_queue_enforces_record_frame_and_queue_limits() {
-        let mut queue = StreamSendQueue::<1, 8, 8>::new(8);
+        let mut queue = StreamSendQueue::<2, 8, 8>::new(8);
         assert_eq!(
             queue.push(b"12345"),
             Err(StreamFrameError::FrameBufferTooSmall {
@@ -1120,7 +1120,14 @@ mod stream_framing_tests {
         );
         queue.push(b"1234").unwrap();
         assert_eq!(queue.queued_bytes(), 8);
-        assert_eq!(queue.push(b"x"), Err(StreamFrameError::QueueFull));
+        assert_eq!(
+            queue.push(b"x"),
+            Err(StreamFrameError::QueueByteLimitReached {
+                maximum: 8,
+                queued: 8,
+                incoming: 5
+            })
+        );
         assert_eq!(queue.advance_written(1), Ok(false));
         assert_eq!(queue.queued_bytes(), 7);
         assert_eq!(
@@ -1131,8 +1138,11 @@ mod stream_framing_tests {
                 incoming: 6
             })
         );
-    }
 
+        let mut full = StreamSendQueue::<1, 8, 16>::new(4);
+        full.push(b"x").unwrap();
+        assert_eq!(full.push(b"x"), Err(StreamFrameError::QueueFull));
+    }
     #[test]
     fn send_queue_rejects_zero_progress_and_invalid_write_counts() {
         let mut queue = StreamSendQueue::<2, 32, 64>::new(28);
