@@ -168,24 +168,30 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
         now_ns: u64,
         workers: &[Worker],
     ) -> Option<DispatchDecision> {
-        if CAPACITY == 0 { return None; }
+        if CAPACITY == 0 {
+            return None;
+        }
         let start = (key.stable_hash() as usize) % CAPACITY;
         for offset in 0..CAPACITY {
             let index = (start + offset) % CAPACITY;
             if let Some(mut entry) = self.entries[index]
                 && entry.key == key
             {
-                if !worker_is_eligible(workers, entry.worker_id) { return None; }
+                if !worker_is_eligible(workers, entry.worker_id) {
+                    return None;
+                }
                 entry.last_seen_ns = entry.last_seen_ns.max(now_ns);
                 self.entries[index] = Some(entry);
                 self.metrics.lookups = self.metrics.lookups.saturating_add(1);
                 self.metrics.affinity_hits = self.metrics.affinity_hits.saturating_add(1);
                 return Some(DispatchDecision {
-                worker_id: entry.worker_id,
-                kind: DispatchKind::AffinityHit,
-            });
+                    worker_id: entry.worker_id,
+                    kind: DispatchKind::AffinityHit,
+                });
             }
-            if self.entries[index].is_none() { break; }
+            if self.entries[index].is_none() {
+                break;
+            }
         }
         None
     }
@@ -220,9 +226,9 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
                         self.entries[index] = Some(entry);
                         self.metrics.affinity_hits = self.metrics.affinity_hits.saturating_add(1);
                         return Ok(DispatchDecision {
-                        worker_id: entry.worker_id,
-                        kind: DispatchKind::AffinityHit,
-                    });
+                            worker_id: entry.worker_id,
+                            kind: DispatchKind::AffinityHit,
+                        });
                     }
                     entry.worker_id = preferred_worker_id;
                     entry.last_seen_ns = now_ns;
