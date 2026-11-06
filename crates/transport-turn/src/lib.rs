@@ -1811,7 +1811,10 @@ mod reactor_tests {
         reactor.register(4).unwrap();
         assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Idle);
         reactor.schedule(4, MonotonicTime(500)).unwrap();
-        assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Deadline(MonotonicTime(500)));
+        assert_eq!(
+            reactor.next_wakeup(),
+            TurnReactorWakeup::Deadline(MonotonicTime(500))
+        );
         reactor.wake(4).unwrap();
         reactor.wake(4).unwrap();
         assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Ready);
