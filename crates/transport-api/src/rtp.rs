@@ -192,7 +192,6 @@ mod tests {
     #[test]
     fn reports_insufficient_output_storage() {
         let header = RtpRecordHeader {
-            marker: false,
             sequence_number: 1,
             timestamp: 2,
             ssrc: 3,
