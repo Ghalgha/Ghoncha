@@ -86,6 +86,7 @@ pub struct ManagedAllocation {
     state: AllocationState,
     load: AllocationLoad,
     deallocation_confirmed: bool,
+    socket_closed_after_deallocation_failure: bool,
 }
 
 impl ManagedAllocation {
@@ -192,6 +193,7 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
             state: AllocationState::Active,
             load: AllocationLoad::IDLE,
             deallocation_confirmed: false,
+            socket_closed_after_deallocation_failure: false,
         });
         self.len += 1;
         Ok(())
@@ -343,6 +345,7 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
             return Err(AllocationManagerError::PendingWorkRemains);
         }
         slot.deallocation_confirmed = false;
+        slot.socket_closed_after_deallocation_failure = false;
         slot.state = AllocationState::Deallocating;
         Ok(())
     }
@@ -359,6 +362,32 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
             return Err(AllocationManagerError::NotDeallocating);
         }
         slot.deallocation_confirmed = true;
+        Ok(())
+    }
+
+    /// Records terminal local cleanup after TURN Delete could not be confirmed.
+    ///
+    /// The caller may invoke this only after the OS socket has been definitively
+    /// closed and all queued/in-flight work has been discarded or completed.
+    /// This does not claim that the TURN server released its allocation; the
+    /// server-side allocation may remain until its lifetime expires.
+    pub fn confirm_socket_closed_after_deallocation_failure(
+        &mut self,
+        id: u16,
+    ) -> Result<(), AllocationManagerError> {
+        let slot = self
+            .get_mut(id)
+            .ok_or(AllocationManagerError::UnknownAllocation)?;
+        if slot.state != AllocationState::Deallocating {
+            return Err(AllocationManagerError::NotDeallocating);
+        }
+        if slot.load.in_flight_packets != 0 || slot.load.queued_bytes != 0 {
+            return Err(AllocationManagerError::PendingWorkRemains);
+        }
+        if slot.deallocation_confirmed {
+            return Err(AllocationManagerError::InvalidStateTransition);
+        }
+        slot.socket_closed_after_deallocation_failure = true;
         Ok(())
     }
 
@@ -383,7 +412,7 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         if slot.state != AllocationState::Deallocating {
             return Err(AllocationManagerError::NotDeallocating);
         }
-        if !slot.deallocation_confirmed {
+        if !slot.deallocation_confirmed && !slot.socket_closed_after_deallocation_failure {
             return Err(AllocationManagerError::DeallocationNotConfirmed);
         }
         self.flow_dispatcher.forget_worker(id);
@@ -841,6 +870,65 @@ mod tests {
         let retired = manager.take_drained(1).unwrap();
         assert_eq!(retired.local_addr().port(), 40001);
         assert!(manager.is_empty());
+    }
+
+    #[test]
+    fn failed_delete_requires_closed_socket_and_no_pending_work_before_retirement() {
+        let mut manager = TurnAllocationManager::<1>::new();
+        manager.insert(1, engine(40001)).unwrap();
+        manager.mark_unhealthy(1).unwrap();
+        manager.begin_deallocation(1).unwrap();
+
+        manager
+            .confirm_socket_closed_after_deallocation_failure(1)
+            .unwrap();
+        let retired = manager.take_drained(1).unwrap();
+        assert_eq!(retired.local_addr().port(), 40001);
+        assert!(manager.is_empty());
+    }
+
+    #[test]
+    fn failed_delete_cannot_release_slot_while_work_remains_or_before_socket_close() {
+        let mut manager = TurnAllocationManager::<1>::new();
+        manager.insert(1, engine(40001)).unwrap();
+        manager.mark_unhealthy(1).unwrap();
+        manager
+            .update_load(
+                1,
+                AllocationLoad {
+                    queued_bytes: 128,
+                    ..AllocationLoad::IDLE
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            manager.begin_deallocation(1),
+            Err(AllocationManagerError::PendingWorkRemains)
+        );
+        manager.update_load(1, AllocationLoad::IDLE).unwrap();
+        manager.begin_deallocation(1).unwrap();
+
+        assert!(matches!(
+            manager.take_drained(1),
+            Err(AllocationManagerError::DeallocationNotConfirmed)
+        ));
+        manager
+            .update_load(
+                1,
+                AllocationLoad {
+                    in_flight_packets: 1,
+                    ..AllocationLoad::IDLE
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            manager.confirm_socket_closed_after_deallocation_failure(1),
+            Err(AllocationManagerError::PendingWorkRemains)
+        );
+        assert_eq!(
+            manager.admit_new_flow(true, 1),
+            AdmissionDecision::Backpressure
+        );
     }
 
     #[test]
