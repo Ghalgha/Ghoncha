@@ -1878,6 +1878,23 @@ mod reactor_tests {
     }
 
     #[test]
+    fn reactor_partial_ready_drain_keeps_remaining_allocations_ready() {
+        let mut reactor = TurnUdpReactor::<3>::new();
+        for id in 1..=3 {
+            reactor.register(id).unwrap();
+            reactor.wake(id).unwrap();
+        }
+
+        let mut due = [0; 1];
+        assert_eq!(reactor.take_due(MonotonicTime(0), &mut due, 3), 1);
+        assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Ready);
+        assert_eq!(reactor.take_due(MonotonicTime(0), &mut due, 3), 1);
+        assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Ready);
+        assert_eq!(reactor.take_due(MonotonicTime(0), &mut due, 3), 1);
+        assert_eq!(reactor.next_wakeup(), TurnReactorWakeup::Idle);
+    }
+
+    #[test]
     fn reactor_wake_is_immediate_work_not_a_fake_timer() {
         let mut reactor = TurnUdpReactor::<2>::new();
         reactor.register(4).unwrap();
