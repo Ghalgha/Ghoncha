@@ -930,21 +930,30 @@ impl<
         self.queues.peer_data_len()
     }
 
-    /// Returns the socket and protocol state only when no datagrams remain queued.
+    /// Returns the socket, protocol state, and queues without discarding work.
     ///
-    /// On failure, ownership of the intact driver is returned so the caller can
-    /// flush pending work or explicitly abandon the Allocation.
-    pub fn try_into_parts(self) -> Result<(S, TurnUdpEngine), Self> {
-        if self.queues.control_len() != 0 || self.queues.peer_data_len() != 0 {
-            return Err(self);
-        }
-        Ok((self.socket, self.engine))
+    /// Pending control and peer datagrams remain available to the caller in the
+    /// returned queues and must be flushed or explicitly abandoned.
+    pub fn into_parts(
+        self,
+    ) -> (
+        S,
+        TurnUdpEngine,
+        TurnUdpSendQueues<
+            CONTROL_CAPACITY,
+            PEER_CAPACITY,
+            MAX_DATAGRAM,
+            CONTROL_MAX_BYTES,
+            PEER_MAX_BYTES,
+        >,
+    ) {
+        (self.socket, self.engine, self.queues)
     }
 
-    /// Explicitly abandons queued datagrams and returns the socket and engine.
+    /// Explicitly abandons queued datagrams and returns only socket and engine.
     ///
-    /// This is intended only for teardown after the caller has decided that
-    /// pending control and peer traffic must be discarded.
+    /// Use only during teardown after deciding that pending control and peer
+    /// traffic must be discarded.
     pub fn into_parts_discarding_pending(self) -> (S, TurnUdpEngine) {
         (self.socket, self.engine)
     }
