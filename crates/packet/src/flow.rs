@@ -2,7 +2,7 @@
 //!
 //! This module is allocation-free. IPv6 extension headers are walked with strict
 //! header-count and byte limits; unsupported opaque protocols use network-level
-affinity.
+//! affinity.
 
 #[cfg(test)]
 extern crate std;
