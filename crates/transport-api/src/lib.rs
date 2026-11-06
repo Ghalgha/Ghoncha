@@ -413,13 +413,26 @@ pub trait RecordTransport {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StreamFrameError {
     ZeroLengthRecord,
-    RecordTooLarge { maximum: usize, actual: usize },
-    FrameBufferTooSmall { maximum_frame: usize, required: usize },
+    RecordTooLarge {
+        maximum: usize,
+        actual: usize,
+    },
+    FrameBufferTooSmall {
+        maximum_frame: usize,
+        required: usize,
+    },
     QueueFull,
-    QueueByteLimitReached { maximum: usize, queued: usize, incoming: usize },
+    QueueByteLimitReached {
+        maximum: usize,
+        queued: usize,
+        incoming: usize,
+    },
     NoPendingFrame,
     NoProgress,
-    WriteExceedsPending { remaining: usize, attempted: usize },
+    WriteExceedsPending {
+        remaining: usize,
+        attempted: usize,
+    },
     DecoderFailed,
 }
 
@@ -605,13 +618,14 @@ impl<const CAPACITY: usize, const MAX_FRAME: usize, const MAX_QUEUED_BYTES: usiz
             });
         }
 
-        let frame_len = record
-            .len()
-            .checked_add(4)
-            .ok_or(StreamFrameError::FrameBufferTooSmall {
-                maximum_frame: MAX_FRAME,
-                required: usize::MAX,
-            })?;
+        let frame_len =
+            record
+                .len()
+                .checked_add(4)
+                .ok_or(StreamFrameError::FrameBufferTooSmall {
+                    maximum_frame: MAX_FRAME,
+                    required: usize::MAX,
+                })?;
         if frame_len > MAX_FRAME {
             return Err(StreamFrameError::FrameBufferTooSmall {
                 maximum_frame: MAX_FRAME,
@@ -1072,9 +1086,15 @@ mod stream_framing_tests {
         queue.push(b"first").unwrap();
         queue.push(b"second").unwrap();
 
-        assert_eq!(queue.front().unwrap(), &[0, 0, 0, 5, b'f', b'i', b'r', b's', b't']);
+        assert_eq!(
+            queue.front().unwrap(),
+            &[0, 0, 0, 5, b'f', b'i', b'r', b's', b't']
+        );
         assert!(!queue.advance_written(3).unwrap());
-        assert_eq!(queue.front().unwrap(), &[0, 5, b'f', b'i', b'r', b's', b't']);
+        assert_eq!(
+            queue.front().unwrap(),
+            &[0, 5, b'f', b'i', b'r', b's', b't']
+        );
         assert!(!queue.advance_written(2).unwrap());
         assert_eq!(queue.front().unwrap(), b"first");
         assert!(queue.advance_written(5).unwrap());
@@ -1121,10 +1141,7 @@ mod stream_framing_tests {
             Err(StreamFrameError::NoPendingFrame)
         );
         queue.push(b"abc").unwrap();
-        assert_eq!(
-            queue.advance_written(0),
-            Err(StreamFrameError::NoProgress)
-        );
+        assert_eq!(queue.advance_written(0), Err(StreamFrameError::NoProgress));
         assert_eq!(
             queue.advance_written(8),
             Err(StreamFrameError::WriteExceedsPending {
