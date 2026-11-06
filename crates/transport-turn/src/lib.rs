@@ -679,6 +679,11 @@ impl TurnUdpEngine {
 
         let required = build.data.len();
         if output.len() < required {
+            // send_to() has already advanced the TURN client and produced a
+            // delayed build. The caller cannot safely retry this payload with
+            // a larger buffer because the original send may have been consumed.
+            // Fail the protocol state closed instead of risking silent loss.
+            self.client.protocol_error();
             return Err(TurnError::BufferTooSmall { required });
         }
 
