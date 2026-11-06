@@ -26,7 +26,7 @@ Android VpnService / TUN
   -> IP forwarding and NAT
 ```
 
-The exact placement of DTLS versus the GHONCHA tunnel protocol must remain explicit. The reference VK projects use DTLS as the client-to-server protected carrier. GHONCHA must not accidentally double-encrypt every packet without a measured and documented reason. The initial prototype should choose one authenticated record layer and prove its peer identity, replay handling, key lifecycle and wire compatibility before production integration.
+For the VK adapter, WireGuard is the inner VPN protocol and DTLS application data is the outer client-to-gateway carrier; TURN relays the DTLS datagrams. This is an intentional two-layer design matching the reference transport topology, not two competing implementations of the same tunnel protocol. The DTLS layer must authenticate the configured gateway identity, while WireGuard independently authenticates the VPN peer. Measure the added CPU, MTU and latency cost; do not silently remove either layer or replace WireGuard with a custom record cipher. Other adapters may carry WireGuard datagrams directly when their threat model and network path permit it.
 
 ## 2. Two separate interfaces
 
@@ -89,7 +89,7 @@ Capabilities are data, not a pile of VK-specific conditionals in the packet engi
 
 - CredentialProvider: VK Calls user-authorized call/session bootstrap.
 - Carrier: TURN allocation, peer permission, channel binding, ChannelData or Send/Data indications.
-- Client-to-gateway protected carrier: DTLS as established by the interoperability prototype.
+- Client-to-gateway carrier: DTLS application-data records containing WireGuard datagrams; the DTLS association is separate from TURN and must pin/authenticate the GHONCHA gateway.
 - Default mode: TURN over UDP where reachable.
 - Fallbacks: only modes actually returned/supported by the provider and verified against the peer, such as TURN over TCP/TLS.
 - The VK relay is a relay, not the GHONCHA gateway.
