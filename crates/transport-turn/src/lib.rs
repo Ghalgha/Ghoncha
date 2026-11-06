@@ -196,6 +196,125 @@ impl<const CAPACITY: usize, const MAX_DATAGRAM: usize, const MAX_QUEUED_BYTES: u
     }
 }
 
+/// Class of a datagram selected from the TURN send queues.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatagramClass {
+    /// TURN control traffic: Allocate, authentication, Refresh, Permission,
+    /// ChannelBind, and Delete transactions.
+    Control,
+    /// Encapsulated peer payload carried by Send Indication or ChannelData.
+    PeerData,
+}
+
+/// Independent bounded queues for TURN control and peer payload datagrams.
+///
+/// Control traffic is selected first so sustained user-data traffic cannot
+/// leave allocation refreshes or permission/channel transactions waiting
+/// behind a bulk FIFO. Each class has its own record and byte budget.
+pub struct TurnUdpSendQueues<
+    const CONTROL_CAPACITY: usize,
+    const PEER_CAPACITY: usize,
+    const MAX_DATAGRAM: usize,
+    const CONTROL_MAX_BYTES: usize,
+    const PEER_MAX_BYTES: usize,
+> {
+    control: DatagramSendQueue<CONTROL_CAPACITY, MAX_DATAGRAM, CONTROL_MAX_BYTES>,
+    peer_data: DatagramSendQueue<PEER_CAPACITY, MAX_DATAGRAM, PEER_MAX_BYTES>,
+}
+
+impl<
+        const CONTROL_CAPACITY: usize,
+        const PEER_CAPACITY: usize,
+        const MAX_DATAGRAM: usize,
+        const CONTROL_MAX_BYTES: usize,
+        const PEER_MAX_BYTES: usize,
+    >
+    TurnUdpSendQueues<
+        CONTROL_CAPACITY,
+        PEER_CAPACITY,
+        MAX_DATAGRAM,
+        CONTROL_MAX_BYTES,
+        PEER_MAX_BYTES,
+    >
+{
+    pub fn new() -> Self {
+        Self {
+            control: DatagramSendQueue::new(),
+            peer_data: DatagramSendQueue::new(),
+        }
+    }
+
+    pub fn push_control(
+        &mut self,
+        destination: SocketAddr,
+        datagram: &[u8],
+    ) -> Result<(), DatagramQueueError> {
+        self.control.push(destination, datagram)
+    }
+
+    pub fn push_peer_data(
+        &mut self,
+        destination: SocketAddr,
+        datagram: &[u8],
+    ) -> Result<(), DatagramQueueError> {
+        self.peer_data.push(destination, datagram)
+    }
+
+    /// Selects control traffic first, preserving FIFO order within each class.
+    pub fn next(&self) -> Option<(DatagramClass, PendingDatagram<'_>)> {
+        if let Some(datagram) = self.control.front() {
+            return Some((DatagramClass::Control, datagram));
+        }
+        self.peer_data
+            .front()
+            .map(|datagram| (DatagramClass::PeerData, datagram))
+    }
+
+    /// Removes the selected class's front item after a complete socket send.
+    pub fn pop_sent(&mut self, class: DatagramClass) -> Option<usize> {
+        match class {
+            DatagramClass::Control => self.control.pop_sent(),
+            DatagramClass::PeerData => self.peer_data.pop_sent(),
+        }
+    }
+
+    pub const fn control_len(&self) -> usize {
+        self.control.len()
+    }
+
+    pub const fn peer_data_len(&self) -> usize {
+        self.peer_data.len()
+    }
+
+    pub const fn control_queued_bytes(&self) -> usize {
+        self.control.queued_bytes()
+    }
+
+    pub const fn peer_data_queued_bytes(&self) -> usize {
+        self.peer_data.queued_bytes()
+    }
+}
+
+impl<
+        const CONTROL_CAPACITY: usize,
+        const PEER_CAPACITY: usize,
+        const MAX_DATAGRAM: usize,
+        const CONTROL_MAX_BYTES: usize,
+        const PEER_MAX_BYTES: usize,
+    > Default
+    for TurnUdpSendQueues<
+        CONTROL_CAPACITY,
+        PEER_CAPACITY,
+        MAX_DATAGRAM,
+        CONTROL_MAX_BYTES,
+        PEER_MAX_BYTES,
+    >
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Sans-I/O TURN-over-UDP protocol state.
 ///
 /// The TURN credentials are copied into the upstream client state. Never log
@@ -503,6 +622,65 @@ mod tests {
         assert_eq!(queue.front().unwrap().bytes, &[3]);
         assert_eq!(queue.pop_sent(), Some(1));
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn control_datagrams_are_selected_before_peer_data() {
+        let mut queues = TurnUdpSendQueues::<2, 2, 32, 64, 64>::new();
+        queues.push_peer_data(destination(), &[1, 2, 3]).unwrap();
+        queues.push_peer_data(destination(), &[4, 5]).unwrap();
+        queues.push_control(destination(), &[9, 8]).unwrap();
+
+        let (class, pending) = queues.next().unwrap();
+        assert_eq!(class, DatagramClass::Control);
+        assert_eq!(pending.bytes, &[9, 8]);
+        assert_eq!(queues.pop_sent(class), Some(2));
+
+        let (class, pending) = queues.next().unwrap();
+        assert_eq!(class, DatagramClass::PeerData);
+        assert_eq!(pending.bytes, &[1, 2, 3]);
+        assert_eq!(queues.pop_sent(class), Some(3));
+
+        let (class, pending) = queues.next().unwrap();
+        assert_eq!(class, DatagramClass::PeerData);
+        assert_eq!(pending.bytes, &[4, 5]);
+        assert_eq!(queues.pop_sent(class), Some(2));
+        assert!(queues.next().is_none());
+    }
+
+    #[test]
+    fn control_and_peer_data_have_independent_capacity_budgets() {
+        let mut queues = TurnUdpSendQueues::<1, 1, 8, 4, 4>::new();
+        queues.push_peer_data(destination(), &[1, 2, 3, 4]).unwrap();
+        queues.push_control(destination(), &[5, 6, 7, 8]).unwrap();
+
+        assert_eq!(queues.control_len(), 1);
+        assert_eq!(queues.peer_data_len(), 1);
+        assert_eq!(queues.control_queued_bytes(), 4);
+        assert_eq!(queues.peer_data_queued_bytes(), 4);
+        assert_eq!(
+            queues.push_control(destination(), &[9]),
+            Err(DatagramQueueError::RecordCapacityReached)
+        );
+        assert_eq!(
+            queues.push_peer_data(destination(), &[9]),
+            Err(DatagramQueueError::RecordCapacityReached)
+        );
+    }
+
+    #[test]
+    fn would_block_does_not_remove_prioritized_control_datagram() {
+        let mut queues = TurnUdpSendQueues::<2, 2, 16, 32, 32>::new();
+        queues.push_peer_data(destination(), &[1]).unwrap();
+        queues.push_control(destination(), &[2, 3]).unwrap();
+
+        for _ in 0..3 {
+            let (class, pending) = queues.next().unwrap();
+            assert_eq!(class, DatagramClass::Control);
+            assert_eq!(pending.bytes, &[2, 3]);
+            assert_eq!(queues.control_len(), 1);
+            assert_eq!(queues.peer_data_len(), 1);
+        }
     }
 
     #[test]
