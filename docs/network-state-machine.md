@@ -161,7 +161,7 @@ On user disconnect or permission revocation:
 
 ## 6. VK Calls TURN credential-provider contract
 
-VK Calls is integrated as a TURN credential provider, not as a generic WebRTC DataChannel. Keep the provider independent from the TURN/DTLS data plane.
+VK Calls is integrated as a TURN credential provider, not as a generic WebRTC DataChannel. Keep credential acquisition independent from the TURN + DTLS-SRTP/SRTP data plane.
 
 The provider accepts one explicit user-authorized input:
 - a call link/hash supplied by the user; or
