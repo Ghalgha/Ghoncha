@@ -62,9 +62,8 @@ pub enum SpeedTestError {
 /// Sequential result collector for Unlimited, Standard, and EnergySaving.
 ///
 /// The caller supplies a rotated order to reduce test-order bias between runs.
-/// Only one profile is active at a time. A network-generation change invalidates
-/// the run; callers should cancel it rather than combine results from different
-/// network paths.
+/// Only one profile is active at a time. A network-generation change cancels
+/// the run so results from different network paths cannot be combined.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SpeedTestSequence {
     network_generation: u64,
@@ -127,6 +126,7 @@ impl SpeedTestSequence {
         }
 
         if network_generation != self.network_generation {
+            self.state = SpeedTestState::Cancelled;
             return Err(SpeedTestError::StaleNetworkGeneration);
         }
         if !Self::valid_metrics(metrics) {
@@ -248,14 +248,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_stale_network_generation() {
+    fn stale_network_generation_cancels_the_whole_run() {
         let mut run = SpeedTestSequence::new(7, ORDER, false).unwrap();
 
         assert_eq!(
             run.record_result(8, METRICS),
             Err(SpeedTestError::StaleNetworkGeneration)
         );
-        assert_eq!(run.current_profile(), Some(ConnectionProfile::Standard));
+        assert_eq!(run.state(), SpeedTestState::Cancelled);
+        assert_eq!(run.current_profile(), None);
     }
 
     #[test]
