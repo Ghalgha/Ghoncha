@@ -5,8 +5,7 @@ use std::time::Duration;
 use ghoncha_transport_api::MonotonicTime;
 use ghoncha_transport_turn::{
     DatagramFlushResult, DatagramReceive, DatagramSocketError, TurnDatagramSocket,
-    TurnRelayFamilies, TurnUdpDriver,
-    TurnUdpEngine,
+    TurnRelayFamilies, TurnUdpDriver, TurnUdpEngine,
 };
 use turn_client_proto::types::Instant;
 use turn_client_proto::udp::{TurnEvent, TurnPollRet, TurnRecvRet};
@@ -458,7 +457,6 @@ fn socket_driver_retires_after_fatal_send_error() {
         Err(ghoncha_transport_turn::TurnUdpDriverError::Retired)
     ));
 }
-
 
 #[test]
 fn socket_driver_discards_truncated_datagram_without_retiring_allocation() {
