@@ -1,0 +1,12 @@
+[package]
+name = "ghoncha-flow-dispatch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+ghoncha-packet = { path = "../packet" }
+
+[lib]
+path = "src/lib.rs"
