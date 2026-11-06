@@ -362,7 +362,6 @@ fn socket_owning_driver_retains_control_datagram_across_would_block() {
     assert!(!socket.sent[0].1.is_empty());
 }
 
-
 #[test]
 fn socket_driver_parts_preserve_pending_control_datagram() {
     let client_addr: SocketAddr = "192.0.2.11:40001".parse().unwrap();
