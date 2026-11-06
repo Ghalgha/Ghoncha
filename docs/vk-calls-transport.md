@@ -15,7 +15,7 @@ Android TUN
   -> DTLS-protected datagrams
   -> TURN client (Allocate / Permission / ChannelBind / Refresh)
   -> VK Calls TURN relay
-  -> GHONCHA server TURN client / relay listener
+  -> GHONCHA gateway UDP peer socket (publicly reachable)
   -> DTLS termination and GHONCHA authentication
   -> VPN gateway / IP forwarding
 ```
@@ -69,7 +69,7 @@ The client-side TURN adapter must implement and test the actual TURN lifecycle, 
 - implement bounded retransmission, keepalive, cancellation, and cleanup;
 - never reuse credentials or allocations across a different call/session unless the provider explicitly permits it.
 
-The server side receives the DTLS transport from the configured peer and forwards authenticated tunnel datagrams to a loopback or otherwise tightly scoped VPN backend. It must not expose a generic unauthenticated UDP forwarder to the public internet.
+The GHONCHA server is the TURN peer: the VK relay forwards peer datagrams to a UDP socket on the configured GHONCHA gateway address. The gateway does not need to create a second TURN allocation for this topology. That UDP socket feeds the DTLS server endpoint; after peer authentication and record validation, the gateway forwards tunnel datagrams to a loopback or otherwise tightly scoped VPN backend. It must not expose a generic unauthenticated UDP forwarder to the public internet.
 
 TURN allocation, TURN permission, channel binding, DTLS session, GHONCHA peer authentication, and VPN data-plane health are separate states. A successful Allocate does not mean the VPN tunnel is connected.
 
