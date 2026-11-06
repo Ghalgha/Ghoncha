@@ -12,6 +12,9 @@ pub use credentials::*;
 mod identity;
 pub use identity::*;
 
+mod keepalive;
+pub use keepalive::*;
+
 mod rtp;
 pub use rtp::*;
 
