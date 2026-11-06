@@ -772,6 +772,15 @@ pub enum TurnUdpDriverReceive<'a> {
     Datagram(TurnReceiveResult<'a>),
 }
 
+/// Readiness and per-call work limits supplied by the shared reactor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TurnUdpIoReady {
+    pub readable: bool,
+    pub writable: bool,
+    pub max_receive_datagrams: usize,
+    pub max_send_datagrams: usize,
+}
+
 /// Per-readiness work completed by the bounded UDP driver pump.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TurnUdpIoProgress {
@@ -958,12 +967,9 @@ impl<
     /// retain references into the receive buffer.
     pub fn service_ready<F>(
         &mut self,
-        readable: bool,
-        writable: bool,
+        ready: TurnUdpIoReady,
         now: MonotonicTime,
         receive_buffer: &mut [u8],
-        max_receive_datagrams: usize,
-        max_send_datagrams: usize,
         mut on_datagram: F,
     ) -> Result<TurnUdpIoProgress, TurnUdpDriverError>
     where
@@ -972,8 +978,8 @@ impl<
         self.ensure_active()?;
         let mut progress = TurnUdpIoProgress::default();
 
-        if writable {
-            for _ in 0..max_send_datagrams {
+        if ready.writable {
+            for _ in 0..ready.max_send_datagrams {
                 match self.flush_one()? {
                     DatagramFlushResult::Sent { .. } => {
                         progress.sent_datagrams += 1;
@@ -991,8 +997,8 @@ impl<
             }
         }
 
-        if readable {
-            for _ in 0..max_receive_datagrams {
+        if ready.readable {
+            for _ in 0..ready.max_receive_datagrams {
                 match self.receive_one(receive_buffer, now)? {
                     TurnUdpDriverReceive::WouldBlock => {
                         progress.read_would_block = true;
