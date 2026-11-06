@@ -256,6 +256,14 @@ impl<
         self.control.push(destination, datagram)
     }
 
+    /// Queues an already encoded TURN control transmit without rebuilding it.
+    pub fn push_control_transmit<T: AsRef<[u8]>>(
+        &mut self,
+        transmit: &Transmit<T>,
+    ) -> Result<(), DatagramQueueError> {
+        self.control.push(transmit.to, transmit.data.as_ref())
+    }
+
     pub fn push_peer_data(
         &mut self,
         destination: SocketAddr,
@@ -669,6 +677,24 @@ mod tests {
         assert_eq!(pending.bytes, &[4, 5]);
         assert_eq!(queues.pop_sent(class), Some(2));
         assert!(queues.next().is_none());
+    }
+
+    #[test]
+    fn control_transmit_queues_exact_encoded_bytes_and_destination() {
+        let mut queues = TurnUdpSendQueues::<1, 1, 8, 8, 8>::new();
+        let transmit = Transmit::new(
+            &[7, 8, 9][..],
+            TransportType::Udp,
+            destination(),
+            destination(),
+        );
+
+        queues.push_control_transmit(&transmit).unwrap();
+
+        let (class, pending) = queues.next().unwrap();
+        assert_eq!(class, DatagramClass::Control);
+        assert_eq!(pending.destination, destination());
+        assert_eq!(pending.bytes, &[7, 8, 9]);
     }
 
     #[test]
