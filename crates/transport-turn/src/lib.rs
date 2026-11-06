@@ -143,11 +143,7 @@ impl TurnUdpEngine {
     }
 
     /// Creates a TURN permission for a peer IP address.
-    pub fn create_permission(
-        &mut self,
-        peer: IpAddr,
-        now: MonotonicTime,
-    ) -> Result<(), TurnError> {
+    pub fn create_permission(&mut self, peer: IpAddr, now: MonotonicTime) -> Result<(), TurnError> {
         let now = to_instant(now)?;
         self.client
             .create_permission(TransportType::Udp, peer, now)
@@ -158,11 +154,7 @@ impl TurnUdpEngine {
     ///
     /// Until the ChannelBind transaction succeeds, send_to_into may use a
     /// Send Indication instead of ChannelData.
-    pub fn bind_channel(
-        &mut self,
-        peer: SocketAddr,
-        now: MonotonicTime,
-    ) -> Result<(), TurnError> {
+    pub fn bind_channel(&mut self, peer: SocketAddr, now: MonotonicTime) -> Result<(), TurnError> {
         let now = to_instant(now)?;
         self.client
             .bind_channel(TransportType::Udp, peer, now)
@@ -175,9 +167,7 @@ impl TurnUdpEngine {
     }
 
     /// Returns the relayed addresses currently known to the TURN client.
-    pub fn relayed_addresses(
-        &self,
-    ) -> impl Iterator<Item = (TransportType, SocketAddr)> + '_ {
+    pub fn relayed_addresses(&self) -> impl Iterator<Item = (TransportType, SocketAddr)> + '_ {
         self.client.relayed_addresses()
     }
 
