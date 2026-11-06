@@ -393,6 +393,7 @@ fn socket_driver_parts_preserve_pending_control_datagram() {
         inbound: VecDeque::new(),
         block_next_send: false,
         fail_next_send: false,
+        truncate_next_receive: false,
     };
 
     let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
