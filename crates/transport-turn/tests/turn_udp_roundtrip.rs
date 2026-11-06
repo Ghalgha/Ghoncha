@@ -336,12 +336,6 @@ fn socket_owning_driver_retains_control_datagram_across_would_block() {
     assert!(driver.poll_control(MonotonicTime(0)).unwrap());
     assert_eq!(driver.queued_control(), 1);
 
-    // Extraction must return the intact driver while a control datagram is pending.
-    let mut driver = match driver.try_into_parts() {
-        Ok(_) => panic!("driver with queued control traffic must not be extracted"),
-        Err(driver) => driver,
-    };
-
     assert!(matches!(
         driver.flush_one().unwrap(),
         DatagramFlushResult::WouldBlock {
@@ -360,8 +354,36 @@ fn socket_owning_driver_retains_control_datagram_across_would_block() {
     ));
     assert_eq!(driver.queued_control(), 0);
 
-    let (socket, _engine) = driver.try_into_parts().expect("queues should be empty");
+    let (socket, _engine, queues) = driver.into_parts();
+    assert_eq!(queues.control_len(), 0);
+    assert_eq!(queues.peer_data_len(), 0);
     assert_eq!(socket.sent.len(), 1);
     assert_eq!(socket.sent[0].0, server_addr);
     assert!(!socket.sent[0].1.is_empty());
+}
+
+
+#[test]
+fn socket_driver_parts_preserve_pending_control_datagram() {
+    let client_addr: SocketAddr = "192.0.2.11:40001".parse().unwrap();
+    let server_addr: SocketAddr = "198.51.100.11:3478".parse().unwrap();
+    let socket = MockDatagramSocket {
+        local: client_addr,
+        sent: Vec::new(),
+        inbound: VecDeque::new(),
+        block_next_send: false,
+    };
+
+    let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
+        socket,
+        server_addr,
+        "ghoncha-test-user",
+        "ghoncha-test-pass",
+    )
+    .unwrap();
+
+    assert!(driver.poll_control(MonotonicTime(0)).unwrap());
+    let (_socket, _engine, queues) = driver.into_parts();
+    assert_eq!(queues.control_len(), 1);
+    assert_eq!(queues.peer_data_len(), 0);
 }
