@@ -4,16 +4,16 @@ Audit date: 2026-11-06. This is a source-level architecture review of the ten re
 
 ## 1. Main conclusion
 
-The supplied projects implement a TURN-relay transport obtained through VK Calls, generally with DTLS between the client and the user's own server. This is not the generic WebRTC DataChannel architecture described in the earlier draft of `docs/vk-calls-transport.md`.
+The supplied projects implement a TURN-relay transport obtained through VK Calls. Several earlier variants wrap UDP payloads in DTLS; the modern CSQTT source inspected on 2026-11-06 uses DTLS 1.2 for handshake/key agreement, negotiates DTLS-SRTP, then sends steady-state data as RTP-shaped SRTP packets. It is not the generic WebRTC DataChannel architecture described in the earlier draft of `docs/vk-calls-transport.md`.
 
-The common high-level pattern is:
+The observed CSQTT pattern is:
 
 ```text
-Android VPN/TUN -> local packet engine -> DTLS -> TURN client
-  -> VK Calls TURN relay -> user's server -> DTLS -> local VPN backend
+Android VPN/TUN -> local packet engine -> DTLS-SRTP handshake -> TURN client
+  -> VK Calls TURN relay -> user's server -> SRTP/RTP decode -> local VPN backend
 ```
 
-The TURN relay provides reachability between allocations/peers. It is not the VPN gateway. The user's server terminates the end-to-end DTLS/tunnel session and forwards packets to its local WireGuard/Hysteria/CSQTT backend.
+The TURN relay provides reachability to the configured server peer. It is not the VPN gateway. The user's server terminates the DTLS-SRTP/SRTP carrier, extracts the tunnel payload, and forwards packets to its local VPN backend. Other projects may use a simpler DTLS application-data carrier; do not assume every repository implements the same wire protocol.
 
 ## 2. Repository-by-repository findings
 
@@ -22,7 +22,7 @@ The TURN relay provides reachability between allocations/peers. It is not the VP
 Repository: https://github.com/cacggghp/vk-turn-proxy
 
 - Go client/server reference and the earliest project in this list.
-- README describes WireGuard/Hysteria UDP payloads wrapped in DTLS 1.2 and transported through VK (or historically Yandex) TURN using STUN ChannelData.
+- README describes WireGuard/Hysteria UDP payloads wrapped in DTLS 1.2 and transported through VK (or historically Yandex) TURN using STUN ChannelData. This is an earlier DTLS application-data-style design, not necessarily wire-compatible with the newer CSQTT RTP/SRTP carrier.
 - Supports UDP and TCP paths to TURN, multiple parallel workers, local loopback listener, server-side UDP forwarding, Docker/systemd deployment, and a VLESS/TCP mode in later revisions.
 - TURN credentials are obtained from a call link.
 - Useful as the simplest protocol-flow reference and baseline for the client/server separation.
@@ -88,8 +88,10 @@ Repository: https://github.com/amurcanov/csqtt
 - Inspected `turn.rs` uses bounded incoming/outgoing queues, packet pools, driver events and explicit cleanup; `turn_stream.rs` frames TURN stream data and bounds its queues.
 - `turn_endpoint.rs` parses `turn:` / `turns:` endpoints and transport query parameters.
 - `vk_js_calls.rs` demonstrates an account-authorized call-creation/session flow and a credential broker. This is Calls-specific integration, not simply a documented VK public API method.
+- `shared/dtls.rs` implements a custom DTLS 1.2 handshake and exports DTLS-SRTP keying material. `rust-client/session.rs` performs the handshake; `rust-client/obfs.rs` emits RTP-shaped SRTP packets for steady-state data. The server handles DTLS setup separately from later RTP/SRTP packet processing.
+- The client advertises SRTP profiles in the order AES128-CM-HMAC-SHA1-80, AEAD-AES-256-GCM, AEAD-AES-128-GCM. The inspected server chooses the first mutually supported profile, so the legacy AES-CM/SHA1 profile is preferred by that order. GHONCHA should instead test and prefer an AEAD profile such as AES-128-GCM.
 - Android source has dedicated VK API/auth/call managers, TURN transport policy, network tracking, VPN lifecycle, secret storage and worker-count policy.
-- This is the most valuable modern architecture reference in the supplied list, especially for Rust TURN state management and Android integration.
+- This is the most valuable modern architecture reference in the supplied list, especially for Rust TURN state management, credential lifecycle, DTLS-SRTP/SRTP separation, and Android integration.
 - It also contains implementation-specific protocol details and custom behavior. Review every part; do not transplant wholesale or assume it is standards-compliant just because it is written in Rust.
 
 License: README states PolyForm Noncommercial License 1.0.0. This is a major reuse restriction: do not copy or derive GHONCHA code from this repository unless the project's intended use is compatible with that license or separate permission is obtained.
@@ -149,15 +151,16 @@ These are findings about the inspected source revision, not a claim that every r
 4. **Record-header validation needs tightening.** The inspected record protector builds AAD using the DTLS 1.2 version constant rather than validating and binding the received record version. It also reads the explicit GCM nonce from the record without checking that it matches the record epoch/sequence. GHONCHA must validate the supported version and explicit nonce against the record header before accepting the record.
 5. **Hot-path allocation cost is significant.** The inspected parser returns vectors of record/message views, and record protect/unprotect creates new vectors. This is acceptable as a research reference but conflicts with GHONCHA's low-allocation data-plane goal. Measure and replace with bounded caller-owned buffers or a vetted library with reusable output buffers.
 6. **Automatic security-mode downgrade is not a safe default.** The inspected session code can fall back from a failed DTLS-SRTP handshake to a legacy WRAP-SRTP mode in AUTO configuration. GHONCHA must not silently downgrade peer authentication or cryptographic guarantees. A transport fallback may change the carrier, but it must preserve the same authenticated tunnel security policy.
+7. **SRTP profile preference must be deliberate.** The inspected CSQTT client advertises AES128-CM-HMAC-SHA1-80 before AEAD AES-GCM profiles, and the server chooses the first mutually supported profile. GHONCHA should explicitly negotiate and test AEAD-AES-128-GCM where supported, rather than copying that preference order.
 
-**GHONCHA decision:** do not copy the custom DTLS implementation or its handshake/record code. Use it as an interoperability and test-vector reference only. Evaluate a maintained DTLS implementation, and add an application-owned peer identity check because the candidate `dimpl` library explicitly leaves certificate validation to its embedder. Never ship an unauthenticated certificate mode.
+**GHONCHA decision:** do not copy the custom DTLS or SRTP implementation or its handshake/record code. Use the source as an interoperability and state-machine reference only. Evaluate maintained `dimpl` and `rtc-srtp` libraries, and add an application-owned peer identity check because `dimpl` explicitly leaves certificate validation to its embedder. Prefer an AEAD SRTP profile and reject silent downgrade. Never ship an unauthenticated certificate mode.
 
 ## 3. What GHONCHA should learn from these projects
 
-1. **Use TURN as the carrier, DTLS as the protected client-server transport, and a separate authenticated VPN gateway.** Do not confuse TURN relay with the VPN gateway.
+1. **Use VK Calls to obtain TURN access, TURN as the carrier, DTLS-SRTP for key agreement, SRTP/RTP for the media-shaped packet carrier, and WireGuard as the inner VPN.** Do not confuse TURN relay with the VPN gateway.
 2. **Build the TURN engine as a real state machine.** Allocate, permission, channel binding, refresh, nonce changes, timeouts, deallocation and transport-specific framing all need explicit states and tests.
 3. **Separate credential acquisition from data plane.** VK Calls bootstrap is an unstable provider integration; the Rust data plane should consume a generic, short-lived `TurnCredentials` value and should not know how credentials were obtained.
-4. **Keep Android responsibilities narrow.** Android owns VpnService, TUN FD, network observation, socket protection/binding, user authorization and interactive security prompts. Rust owns TURN/DTLS packet transport, queues, workers, tunnel state and metrics.
+4. **Keep Android responsibilities narrow.** Android owns VpnService, TUN FD, network observation, socket protection/binding, user authorization and interactive security prompts. Rust owns TURN, DTLS-SRTP/SRTP packet transport, queues, workers, tunnel state and metrics.
 5. **Benchmark concurrency rather than copying worker counts.** Multi-allocation/worker designs are a tunable experiment, not an unconditional speed optimization.
 6. **Design transport fallback honestly.** UDP, TCP and TLS have different reachability, congestion and energy costs. Do not assume one is universally best.
 7. **Do not copy security shortcuts.** In particular, skip-verification DTLS, custom crypto, weak credential persistence, unbounded queues, and automated security-challenge bypass are not acceptable production defaults.
@@ -184,7 +187,7 @@ GHONCHA can independently implement standards-based TURN and DTLS behavior. Any 
 
 1. Finish the VK credential-provider contract and document which steps use public VK API versus Calls-specific undocumented endpoints.
 2. Implement a standalone TURN protocol test harness with synthetic credentials and a controlled TURN server.
-3. Implement and test DTLS peer authentication between a Rust client and Rust server without VK.
+3. Implement and test DTLS-SRTP peer authentication and SRTP packet protection between a Rust client and Rust server without VK.
 4. Add a VK Calls credential provider behind a feature/configuration boundary, with explicit user consent and safe handling of interactive challenges.
-5. Validate the complete TURN + DTLS + gateway path, then integrate with Android TUN.
+5. Validate the complete TURN + DTLS-SRTP + SRTP + WireGuard gateway path, then integrate with Android TUN.
 6. Benchmark one allocation first; add multi-worker/multi-allocation only if repeatable tests show a net benefit.
