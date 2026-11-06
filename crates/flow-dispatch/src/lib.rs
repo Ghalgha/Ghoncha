@@ -161,6 +161,56 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
         })
     }
 
+    /// Assigns a new flow to a caller-selected eligible worker while keeping
+    /// existing affinity sticky. The caller is responsible for load-aware
+    /// admission and must select only an eligible worker.
+    pub fn dispatch_to(
+        &mut self,
+        key: FlowKey,
+        now_ns: u64,
+        workers: &[Worker],
+        preferred_worker_id: u16,
+    ) -> Result<DispatchDecision, DispatchError> {
+        self.metrics.lookups = self.metrics.lookups.saturating_add(1);
+        if CAPACITY == 0 {
+            self.metrics.table_full = self.metrics.table_full.saturating_add(1);
+            return Err(DispatchError::FlowTableFull);
+        }
+        if !worker_is_eligible(workers, preferred_worker_id) {
+            self.metrics.no_eligible_worker = self.metrics.no_eligible_worker.saturating_add(1);
+            return Err(DispatchError::NoEligibleWorkers);
+        }
+        let start = (key.stable_hash() as usize) % CAPACITY;
+        let mut vacant = None;
+        for offset in 0..CAPACITY {
+            let index = (start + offset) % CAPACITY;
+            match self.entries[index] {
+                Some(mut entry) if entry.key == key => {
+                    if worker_is_eligible(workers, entry.worker_id) {
+                        entry.last_seen_ns = entry.last_seen_ns.max(now_ns);
+                        self.entries[index] = Some(entry);
+                        self.metrics.affinity_hits = self.metrics.affinity_hits.saturating_add(1);
+                        return Ok(DispatchDecision { worker_id: entry.worker_id, kind: DispatchKind::AffinityHit });
+                    }
+                    entry.worker_id = preferred_worker_id;
+                    entry.last_seen_ns = now_ns;
+                    self.entries[index] = Some(entry);
+                    self.metrics.remaps = self.metrics.remaps.saturating_add(1);
+                    return Ok(DispatchDecision { worker_id: preferred_worker_id, kind: DispatchKind::RemappedAfterWorkerLoss });
+                }
+                None if vacant.is_none() => vacant = Some(index),
+                _ => {}
+            }
+        }
+        let Some(index) = vacant else {
+            self.metrics.table_full = self.metrics.table_full.saturating_add(1);
+            return Err(DispatchError::FlowTableFull);
+        };
+        self.entries[index] = Some(Entry { key, worker_id: preferred_worker_id, last_seen_ns: now_ns });
+        self.metrics.new_assignments = self.metrics.new_assignments.saturating_add(1);
+        Ok(DispatchDecision { worker_id: preferred_worker_id, kind: DispatchKind::NewFlow })
+    }
+
     /// Expires at most max_scan table slots, using a persistent scan cursor.
     ///
     /// Call from the shared deadline/event loop. A zero timeout disables expiry.
