@@ -532,10 +532,10 @@ mod tests {
             )
             .unwrap();
         manager.begin_drain(1).unwrap();
-        assert_eq!(
-            manager.take_drained(1).unwrap_err(),
-            AllocationManagerError::PendingWorkRemains
-        );
+        assert!(matches!(
+            manager.take_drained(1),
+            Err(AllocationManagerError::PendingWorkRemains)
+        ));
     }
 
     #[test]
