@@ -71,7 +71,7 @@ pub enum AllocationManagerError {
     DuplicateLocalSocket,
     UnknownAllocation,
     NotDraining,
-    InFlightWorkRemains,
+    PendingWorkRemains,
     Dispatch(DispatchError),
 }
 
@@ -326,8 +326,8 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         if slot.state != AllocationState::Draining {
             return Err(AllocationManagerError::NotDraining);
         }
-        if slot.load.in_flight_packets != 0 {
-            return Err(AllocationManagerError::InFlightWorkRemains);
+        if slot.load.in_flight_packets != 0 || slot.load.queued_bytes != 0 {
+            return Err(AllocationManagerError::PendingWorkRemains);
         }
         self.flow_dispatcher.forget_worker(id);
         let allocation = self.slots[index]
@@ -509,12 +509,33 @@ mod tests {
         );
         assert!(matches!(
             manager.take_drained(1),
-            Err(AllocationManagerError::InFlightWorkRemains)
+            Err(AllocationManagerError::PendingWorkRemains)
         ));
         manager.update_load(1, AllocationLoad::IDLE).unwrap();
         let returned = manager.take_drained(1).unwrap();
         assert_eq!(returned.local_addr().port(), 40001);
         assert!(manager.is_empty());
+    }
+
+    #[test]
+    fn draining_waits_for_queued_bytes_even_when_no_packet_is_in_flight() {
+        let mut manager = TurnAllocationManager::<1>::new();
+        manager.insert(1, engine(40001)).unwrap();
+        manager
+            .update_load(
+                1,
+                AllocationLoad {
+                    queued_bytes: 1200,
+                    in_flight_packets: 0,
+                    ..AllocationLoad::IDLE
+                },
+            )
+            .unwrap();
+        manager.begin_drain(1).unwrap();
+        assert_eq!(
+            manager.take_drained(1).unwrap_err(),
+            AllocationManagerError::PendingWorkRemains
+        );
     }
 
     #[test]
