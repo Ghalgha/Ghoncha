@@ -15,7 +15,11 @@ Android VpnService / TUN
   -> Transport API (opaque WireGuard datagrams)
        -> VK Calls adapter (primary)
             -> VK credential provider (setup/refresh only)
-            -> DTLS application-data carrier to GHONCHA gateway
+            -> Transport API (opaque WireGuard datagrams)
+       -> VK Calls TURN adapter (primary)
+            -> VK credential provider (setup/refresh only)
+            -> DTLS-SRTP handshake and gateway identity validation
+            -> RTP packetization + SRTP protection
             -> TURN client / ChannelData
             -> VK TURN relay
        -> Direct UDP adapter (future)
@@ -23,12 +27,12 @@ Android VpnService / TUN
        -> MASQUE adapter (future)
        -> other approved adapters
   -> GHONCHA gateway UDP peer socket
-  -> DTLS termination and pinned gateway identity check (VK path)
+  -> SRTP authentication/deprotection + RTP payload extraction (VK path)
   -> WireGuard peer authentication/decapsulation
   -> IP forwarding and NAT
 ```
 
-For the VK adapter, WireGuard is the inner VPN protocol and DTLS application data is the outer client-to-gateway carrier; TURN relays the DTLS datagrams. This is an intentional two-layer design matching the reference transport topology, not two competing implementations of the same tunnel protocol. The DTLS layer must authenticate the configured gateway identity, while WireGuard independently authenticates the VPN peer. Measure the added CPU, MTU and latency cost; do not silently remove either layer or replace WireGuard with a custom record cipher. Other adapters may carry WireGuard datagrams directly when their threat model and network path permit it.
+For the VK adapter, the transport API accepts complete WireGuard datagrams and the adapter internally packetizes each record into RTP, protects it with SRTP using keys exported by a DTLS-SRTP handshake, then sends it through TURN. The gateway performs the inverse operation before passing the datagram to WireGuard. This is distinct from sending DTLS record-layer application data: after negotiating DTLS-SRTP, use SRTP for RTP/RTCP data as specified by RFC 5764. Authenticate the configured DTLS gateway identity independently from TURN credentials and WireGuard peer identity. Other adapters may carry WireGuard datagrams directly when their threat model and network path permit it.
 
 ## 2. Two separate interfaces
 
@@ -65,7 +69,7 @@ Required semantics:
 - all asynchronous events are associated with a network/session generation;
 - the adapter reports transport health separately from tunnel authentication and useful IP data flow.
 
-The API must support batch receive/send to amortize event-loop and FFI overhead. Packet processing remains inside Rust; no per-record FFI calls.
+The core must process I/O in bounded batches and keep packet movement inside Rust; no per-record FFI calls. The current trait exposes bounded polling, caller-owned receive buffers, and backpressure for individual records. Add batch send/receive methods only when an implementation and benchmark justify their exact buffer/partial-acceptance semantics; do not claim batching exists before it is implemented.
 
 ## 3. Transport capability model
 
@@ -91,11 +95,11 @@ Capabilities are data, not a pile of VK-specific conditionals in the packet engi
 
 - CredentialProvider: VK Calls user-authorized call/session bootstrap.
 - Carrier: TURN allocation, peer permission, channel binding, ChannelData or Send/Data indications.
-- Client-to-gateway carrier: DTLS application-data records containing WireGuard datagrams; the DTLS association is separate from TURN and must pin/authenticate the GHONCHA gateway.
+- Client-to-gateway carrier: DTLS-SRTP handshake with authenticated gateway identity, followed by RTP packets carrying complete WireGuard datagrams and SRTP protection. Do not send DTLS application-data records on an association that negotiated `use_srtp`.
 - Default mode: TURN over UDP where reachable.
 - Fallbacks: only modes actually returned/supported by the provider and verified against the peer, such as TURN over TCP/TLS.
 - The VK relay is a relay, not the GHONCHA gateway.
-- VK account/call signalling, TURN allocation, DTLS association, GHONCHA peer authentication, and VPN tunnel state remain separate state machines.
+- VK account/call signalling, TURN allocation, DTLS-SRTP handshake, SRTP context/replay state, GHONCHA peer authentication, and VPN tunnel state remain separate state machines.
 
 ### 4.2 Direct UDP — future
 
@@ -166,7 +170,7 @@ Recommended workspace split when implementation begins:
 - `crates/packet`: validated zero-copy IPv4/IPv6 packet views.
 - `crates/transport-api`: transport capabilities, opaque record I/O contract, lifecycle and error types.
 - `crates/tunnel`: authenticated GHONCHA record protocol and peer lifecycle.
-- `crates/transport-vk-turn`: VK credential provider integration and TURN/DTLS adapter.
+- `crates/transport-vk-turn`: VK credential provider integration, TURN, DTLS-SRTP, and SRTP/RTP adapter.
 - `crates/client-core`: network state machine, transport selection and TUN data path.
 - `crates/gateway`: server-side tunnel termination and IP forwarding.
 
@@ -179,7 +183,7 @@ Do not add all crates at once. Add and test one crate at a time. Do not pin TURN
 `turn-client-proto 0.7.3` from `ystreet/turn-proto` is the leading candidate for an interoperability spike:
 - Sans-I/O design separates protocol state from sockets and runtime.
 - Version 0.7.3 documentation lists RFC 8656, IPv6, UDP and TCP client support.
-- For the reference VK proxy topology, start with the UDP TURN client: TURN/UDP is the outer hop to the VK relay. The GHONCHA client-to-gateway DTLS association is application data sent to the gateway peer through TURN; it is not DTLS between the client and the VK TURN server.
+- For the VK proxy topology, start with the UDP TURN client: TURN/UDP is the outer hop to the VK relay. The client-to-gateway DTLS-SRTP association is carried through TURN; this is not DTLS between the client and the VK TURN server.
 - The crate also documents separate TLS-over-TCP and DTLS-over-UDP client extension crates. Those secure the client-to-TURN-server hop and are not interchangeable with the end-to-end DTLS carrier used by the reference projects.
 - It uses `turn-types` / `stun-proto` and has a documented API.
 - The public API exposes a generic `recv(Transmit<T>) -> TurnRecvRet<T>` path that can retain caller-owned buffer storage. Its convenience `poll_recv()` path returns `Vec<u8>`; do not use that convenience path in the hot packet loop without proving its allocation cost. Prototype the generic receive path with reusable packet-pool buffers and measure allocations per packet.
@@ -189,36 +193,40 @@ Do not add all crates at once. Add and test one crate at a time. Do not pin TURN
 
 The CSQTT TURN engine remains an important comparison implementation. Compare wire behavior and tests rather than assuming a newer crate is automatically more correct.
 
-### DTLS
+### DTLS-SRTP
 
-`dimpl 0.9.0` (released 2026-10-25) is a Sans-I/O DTLS 1.2/1.3 candidate with explicit version constructors and an event-loop-oriented design. It is a candidate for the **client-to-GHONCHA-gateway application DTLS association**, not a TURN client and not the TURN-to-relay security wrapper.
+`dimpl 0.9.0` is a Sans-I/O DTLS 1.2/1.3 candidate with explicit version constructors and DTLS-SRTP key export. It is a candidate for the **client-to-GHONCHA-gateway DTLS-SRTP handshake**, not a TURN client and not the TURN-to-relay security wrapper.
 - prove DTLS 1.2 interoperability with the reference CSQTT/WDTT client and server wire behavior;
 - verify certificate or PSK peer authentication and reject insecure verification shortcuts;
-- the library exposes the peer certificate but explicitly leaves PKI/fingerprint/name validation to the application; GHONCHA must validate the certificate fingerprint against authenticated provisioning and must not send WireGuard application data until that check succeeds;
-- prefer the certificate-based DTLS 1.2 ECDHE-ECDSA profile for the first interoperability test; evaluate PSK mode separately because the documented DTLS 1.2 PSK suite uses AES-128-CCM with an 8-byte tag;
+- the library exposes the peer certificate but explicitly leaves PKI/fingerprint/name validation to the application; GHONCHA must validate the certificate fingerprint against authenticated provisioning before accepting exported SRTP keying material or sending tunnel data;
+- verify actual `use_srtp` profile negotiation and DTLS-SRTP interoperability; prefer a certificate-based DTLS 1.2 ECDHE-ECDSA profile for the first test;
 - every fatal error from the public DTLS processing API requires discarding the DTLS instance and starting a new handshake; transient malformed/replayed datagrams are handled internally by the library;
 - the release documents no session resumption or renegotiation, so measure full-handshake cost during network handover and call/credential refresh;
-- test retransmission, fragmentation, replay handling, key lifecycle and malformed records;
+- test retransmission, fragmentation, profile negotiation, key lifecycle and malformed records;
 - verify Android NDK targets and crypto dependency portability;
 - its 0.9.0 manifest declares edition 2024, MSRV 1.89.0, and MIT OR Apache-2.0;
 - the default feature set enables aws-lc-rs and rcgen; a separate rust-crypto feature exists. Compare Android ABI build size, compile time, CPU performance, and cryptographic-provider portability before selecting a provider;
 - review the project's security history and license.
 
-Do not use `rtc-dtls` solely because it is mature within WebRTC: its feature set and handshake expectations must be checked against this non-WebRTC client/server use case.
+### SRTP
+
+`rtc-srtp 0.21.1` is a Sans-I/O SRTP/SRTCP candidate. Its documented context provides RTP/RTCP protection, replay protection, and rollover-counter tracking. It documents AEAD-AES-128-GCM and AES-128-CM-SHA1-80 profiles; GHONCHA should prioritize an AEAD profile and must verify that its negotiated profile and keying material match the selected DTLS implementation. The crate is not selected for production until interoperability, Android ABI builds, licensing, and performance are verified.
+
+Do not assume that an RTP header with an Opus or VP8 payload type is a valid Opus/VP8 media packet when its payload actually contains opaque VPN data. Define a private, explicitly configured RTP payload format for GHONCHA. Any media-shaped camouflage experiment must be isolated, accurately described, and tested separately from protocol conformance.
 
 ### Standards
 
-TURN behavior follows RFC 8656 and STUN behavior follows RFC 8489. TURN-over-TCP/TLS framing, UDP retransmission, allocation lifetime, permissions, ChannelBind, nonce challenges, IPv6 and MTU handling require dedicated conformance tests.
+TURN behavior follows RFC 8656 and STUN behavior follows RFC 8489. DTLS-SRTP follows RFC 5764; SRTP AES-GCM follows RFC 7714. TURN-over-TCP/TLS framing, UDP retransmission, allocation lifetime, permissions, ChannelBind, nonce challenges, IPv6 and MTU handling require dedicated conformance tests.
 
 ## 9. Decision gates
 
 Before the first production adapter:
 1. Define the exact record-layer choice and authenticated peer identity.
 2. Build a client/server interoperability harness independent of Android and VK.
-3. Compare `turn-client-proto` with the CSQTT reference on identical test vectors and TURN servers.
-4. Compare `dimpl` with the reference DTLS behavior; no insecure certificate bypass.
+3. Compare `turn-client-proto` with the reference TURN engine on identical test vectors and TURN servers.
+4. Verify `dimpl` DTLS-SRTP negotiation and `rtc-srtp` packet protection against an independent SRTP implementation; no insecure certificate bypass.
 5. Cross-compile the selected dependencies for Android ABIs using the current supported NDK.
-6. Fuzz STUN/TURN parsing, DTLS record handling, and transport framing.
+6. Fuzz STUN/TURN parsing, DTLS-SRTP handshake, RTP/SRTP framing, and transport record boundaries.
 7. Verify licensing and transitive dependencies.
 8. Benchmark UDP first, then TCP/TLS fallback and controlled worker-count changes.
 9. Integrate TUN only after the standalone client/server path is authenticated, stable and measured.
