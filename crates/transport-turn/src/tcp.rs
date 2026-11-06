@@ -7,7 +7,7 @@
 
 use core::net::{IpAddr, SocketAddr};
 
-use turn_client_proto::api::{Data, TurnClientApi, TurnConfig, Transmit};
+use turn_client_proto::api::{Data, Transmit, TurnClientApi, TurnConfig};
 use turn_client_proto::prelude::DelayedTransmitBuild;
 use turn_client_proto::tcp::{
     BindChannelError, CreatePermissionError, DeleteError, SendError, TurnClientTcp, TurnEvent,
@@ -284,8 +284,8 @@ mod tests {
 
     #[test]
     fn creates_tcp_control_connection_with_udp_relay_transport() {
-        let mut engine = TurnTcpEngine::new(local(), server(), "test-user", "test-password")
-            .unwrap();
+        let mut engine =
+            TurnTcpEngine::new(local(), server(), "test-user", "test-password").unwrap();
         assert_eq!(engine.local_addr(), local());
         assert_eq!(engine.server_addr(), server());
 
@@ -306,12 +306,7 @@ mod tests {
             Err(TurnTcpError::InvalidLocalPort)
         ));
         assert!(matches!(
-            TurnTcpEngine::new(
-                local(),
-                "0.0.0.0:3478".parse().unwrap(),
-                "user",
-                "password"
-            ),
+            TurnTcpEngine::new(local(), "0.0.0.0:3478".parse().unwrap(), "user", "password"),
             Err(TurnTcpError::InvalidServerAddress)
         ));
         assert!(matches!(
