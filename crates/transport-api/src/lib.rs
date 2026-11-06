@@ -126,6 +126,43 @@ pub struct PollOutcome {
     pub next_deadline: Option<MonotonicTime>,
 }
 
+/// Non-secret reasons why a transport path has degraded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportDegradation {
+    RelayUnavailable,
+    Congestion,
+    HighLatency,
+    HighLoss,
+    PathMtuReduced,
+    NetworkChanged,
+    Other,
+}
+
+/// Events emitted by an adapter and drained by the Rust client core.
+///
+/// Events are advisory observations, not proof that the VPN tunnel is
+/// authenticated or that application traffic is flowing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportEventKind {
+    StateChanged(TransportState),
+    Degraded(TransportDegradation),
+    PathMtuChanged { mtu: u16 },
+    CredentialsExpiring,
+    RemoteClosed,
+}
+
+/// A transport event tagged with its originating network generation.
+///
+/// The consumer must discard events whose generation is not the currently
+/// active network generation. Timestamps use the same monotonic clock supplied
+/// to the adapter's poll method.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransportEvent {
+    pub at: MonotonicTime,
+    pub network_generation: u64,
+    pub kind: TransportEventKind,
+}
+
 /// Result of attempting to enqueue one complete record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SendOutcome {
@@ -194,6 +231,16 @@ pub trait RecordTransport {
     fn poll(&mut self, now: MonotonicTime, budget: IoBudget)
     -> Result<PollOutcome, TransportError>;
 
+    /// Drains up to output.len() pending events into caller-owned storage.
+    ///
+    /// Events must be returned in emission order. Implementations must not
+    /// consume an event that does not fit in output. A zero-length output slice
+    /// must return zero without changing adapter state.
+    fn poll_events(&mut self, output: &mut [TransportEvent]) -> usize {
+        let _ = output;
+        0
+    }
+
     /// Enqueues one complete record or reports backpressure.
     fn send_record(&mut self, record: &[u8]) -> Result<SendOutcome, TransportError>;
 
@@ -245,6 +292,22 @@ mod tests {
 
         assert_eq!(framing, RecordFraming::LengthPrefixedStream);
         assert_eq!(delivery, DeliverySemantics::ReliableOrdered);
+    }
+
+    #[test]
+    fn events_are_scoped_to_a_network_generation() {
+        let event = TransportEvent {
+            at: MonotonicTime(42),
+            network_generation: 9,
+            kind: TransportEventKind::Degraded(TransportDegradation::HighLoss),
+        };
+
+        assert_eq!(event.at, MonotonicTime(42));
+        assert_eq!(event.network_generation, 9);
+        assert_eq!(
+            event.kind,
+            TransportEventKind::Degraded(TransportDegradation::HighLoss)
+        );
     }
 
     struct MockTransport {
