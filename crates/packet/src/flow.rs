@@ -38,6 +38,7 @@ pub enum FlowKeyError {
     UnsupportedIpv6Extension(u8),
     InvalidIpv6FragmentHeader,
     Ipv6ExtensionLimit,
+    InvalidIpv6ExtensionLength,
     TruncatedHeader,
 }
 
@@ -96,7 +97,11 @@ impl FlowKey {
                             }
                             let header = &bytes[payload_offset..];
                             protocol = header[0];
-                            usize::from(header[1] + 2) * 4
+                            let length = (usize::from(header[1]) + 2) * 4;
+                            if length < 12 {
+                                return Err(FlowKeyError::InvalidIpv6ExtensionLength);
+                            }
+                            length
                         }
                         _ => {
                             if remaining < 2 {
@@ -104,7 +109,7 @@ impl FlowKey {
                             }
                             let header = &bytes[payload_offset..];
                             protocol = header[0];
-                            usize::from(header[1] + 1) * 8
+                            (usize::from(header[1]) + 1) * 8
                         }
                     };
 
@@ -353,6 +358,20 @@ mod tests {
                 source: 3210,
                 destination: 443
             }
+        );
+    }
+
+    #[test]
+    fn rejects_too_short_ipv6_authentication_header() {
+        let mut bytes = std::vec![0_u8; 40 + 8];
+        bytes[0] = 0x60;
+        bytes[4..6].copy_from_slice(&8_u16.to_be_bytes());
+        bytes[6] = 51;
+        bytes[40] = 17;
+        bytes[41] = 0;
+        assert_eq!(
+            FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
+            Err(FlowKeyError::InvalidIpv6ExtensionLength)
         );
     }
 
