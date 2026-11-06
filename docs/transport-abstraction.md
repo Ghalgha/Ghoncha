@@ -1,6 +1,6 @@
 # GHONCHA transport abstraction
 
-Status: design contract for implementation. VK Calls TURN is the primary transport. The abstraction exists to make additional transports possible without changing the packet engine, tunnel cryptography, Android VPN lifecycle, or server gateway.
+Status: design contract with partial Rust implementation. VK Calls TURN is the primary transport. Generic TURN now has Sans-I/O UDP and TCP engines plus bounded socket-driver primitives; TLS, Android socket integration, credential-provider integration, end-to-end transport selection, and gateway interoperability remain unfinished. The current TCP mode is TURN over TCP with a UDP relay allocation, not RFC 6062 TCP relay. These components are not yet a production-ready fallback. The abstraction exists to add transports without changing the packet engine, tunnel cryptography, Android VPN lifecycle, or server gateway.
 
 ## 1. Architectural rule
 
@@ -23,7 +23,7 @@ Android VpnService / TUN
             -> TURN client / ChannelData
             -> VK TURN relay
        -> Direct UDP adapter (future)
-       -> Generic TURN adapter (future)
+       -> Generic TURN engine and bounded UDP/TCP drivers (in progress; TLS and Android integration pending)
        -> MASQUE adapter (future)
        -> other approved adapters
   -> GHONCHA gateway UDP peer socket
@@ -105,9 +105,11 @@ Capabilities are data, not a pile of VK-specific conditionals in the packet engi
 
 Direct UDP carries the same authenticated GHONCHA records without a TURN allocation. It must use the same peer authentication, replay protection, key lifecycle and record limits. It is a separate adapter, not a special case inside the VK adapter.
 
-### 4.3 Generic TURN — future
+### 4.3 Generic TURN — in progress
 
-A generic TURN adapter can reuse a standards-compliant TURN engine but must obtain credentials from its own provider. It must not depend on VK call lifecycle or VK-specific response schemas.
+The Rust workspace contains Sans-I/O TURN engines and bounded socket-driver primitives for UDP and TCP client-to-server connections. The TCP engine requests a UDP relay allocation; RFC 6062 TCP relay allocations are not implemented. The stream driver preserves raw TURN framing across partial writes and bounds per-read input, but it is not yet integrated with Android socket creation, network binding, VPN protection, TLS, a credential provider, or the transport selector. Do not advertise TCP/TLS fallback as production-ready until those pieces and end-to-end interoperability tests are complete.
+
+A complete generic TURN adapter must obtain credentials from its own provider. It must not depend on VK call lifecycle or VK-specific response schemas.
 
 ### 4.4 MASQUE — future
 
