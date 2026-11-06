@@ -2,7 +2,7 @@ use core::net::SocketAddr;
 use std::time::Duration;
 
 use ghoncha_transport_api::MonotonicTime;
-use ghoncha_transport_turn::{TurnUdpEngine};
+use ghoncha_transport_turn::TurnUdpEngine;
 use turn_client_proto::udp::{TurnEvent, TurnPollRet, TurnRecvRet};
 use turn_client_proto::types::Instant;
 use turn_server_proto::api::{TurnServerApi, TurnServerPollRet};
@@ -89,7 +89,9 @@ fn deliver_responses(
 ) {
     for response in responses {
         assert!(matches!(
-            engine.receive_from(server_addr, &response.data, now).unwrap(),
+            engine
+                .receive_from(server_addr, &response.data, now)
+                .unwrap(),
             TurnRecvRet::Handled
         ));
     }
@@ -108,7 +110,10 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
         server_addr,
         String::from("ghoncha-test-realm"),
     );
-    server.add_user(String::from("ghoncha-test-user"), String::from("ghoncha-test-pass"));
+    server.add_user(
+        String::from("ghoncha-test-user"),
+        String::from("ghoncha-test-pass"),
+    );
     server.set_nonce_expiry_duration(Duration::from_secs(30));
 
     let mut client = TurnUdpEngine::new(
@@ -148,12 +153,16 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
     assert!(!allocation.is_empty());
     deliver_responses(&mut client, server_addr, allocation, now);
 
-    assert!(client
-        .relayed_addresses()
-        .any(|(transport, addr)| transport == TransportType::Udp && addr == relay_v4));
-    assert!(client
-        .relayed_addresses()
-        .any(|(transport, addr)| transport == TransportType::Udp && addr == relay_v6));
+    assert!(
+        client
+            .relayed_addresses()
+            .any(|(transport, addr)| transport == TransportType::Udp && addr == relay_v4)
+    );
+    assert!(
+        client
+            .relayed_addresses()
+            .any(|(transport, addr)| transport == TransportType::Udp && addr == relay_v6)
+    );
 
     let mut saw_allocation = false;
     while let Some(event) = client.poll_event() {
@@ -194,7 +203,8 @@ fn turn_udp_allocation_permission_channel_and_peer_data_roundtrip() {
 
     let mut saw_channel = false;
     while let Some(event) = client.poll_event() {
-        if matches!(event, TurnEvent::ChannelCreated(TransportType::Udp, addr) if addr == peer_addr) {
+        if matches!(event, TurnEvent::ChannelCreated(TransportType::Udp, addr) if addr == peer_addr)
+        {
             saw_channel = true;
         }
     }
