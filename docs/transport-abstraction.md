@@ -181,6 +181,7 @@ Do not add all crates at once. Add and test one crate at a time. Do not pin TURN
 - The crate also documents separate TLS-over-TCP and DTLS-over-UDP client extension crates. Those secure the client-to-TURN-server hop and are not interchangeable with the end-to-end DTLS carrier used by the reference projects.
 - It uses `turn-types` / `stun-proto` and has a documented API.
 - The public API exposes a generic `recv(Transmit<T>) -> TurnRecvRet<T>` path that can retain caller-owned buffer storage. Its convenience `poll_recv()` path returns `Vec<u8>`; do not use that convenience path in the hot packet loop without proving its allocation cost. Prototype the generic receive path with reusable packet-pool buffers and measure allocations per packet.
+- `TransmitBuild::write_into()` and `DelayedMessageOrChannelSend::write_into()` can serialize into caller-provided output buffers; prefer these over their `build()` methods, which allocate a new `Vec<u8>`. The API also requires `Debug` on some packet-data types, so never enable payload-bearing debug logs or format transport objects containing user traffic.
 - Its crate manifest declares MIT OR Apache-2.0. The upstream workspace manifest currently declares Rust 1.80 as its MSRV; verify the exact published 0.7.3 source package before pinning.
 - It is not yet selected for production. Verify its exact RFC 8656 coverage, VK server interoperability, credential/nonce behavior, Android cross-compilation, dependency graph, allocation behavior and license.
 
