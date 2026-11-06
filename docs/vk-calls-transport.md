@@ -11,16 +11,17 @@ The conceptual path is:
 ```text
 Android TUN
   -> GHONCHA Rust packet engine
-  -> per-session GHONCHA authenticated encryption
-  -> DTLS-protected datagrams
+  -> standard WireGuard tunnel datagram (inner VPN encryption/authentication)
+  -> DTLS application-data record (outer carrier protection)
   -> TURN client (Allocate / Permission / ChannelBind / Refresh)
   -> VK Calls TURN relay
   -> GHONCHA gateway UDP peer socket (publicly reachable)
-  -> DTLS termination and GHONCHA authentication
+  -> DTLS termination and pinned gateway identity check
+  -> WireGuard peer authentication/decapsulation
   -> VPN gateway / IP forwarding
 ```
 
-The TURN relay forwards packets between the client's allocation and the configured GHONCHA server peer. The relay is not the VPN gateway and must not possess GHONCHA traffic keys. The VPN gateway is the only endpoint that decapsulates user IP traffic and routes/NATs it.
+The TURN relay forwards DTLS datagrams between the client's allocation and the configured GHONCHA gateway peer. The relay is not the VPN gateway and must not possess DTLS or WireGuard keys. DTLS protects the carrier hop between the GHONCHA client and gateway; WireGuard remains the inner VPN protocol and the authoritative peer identity for user IP traffic. The VPN gateway is the only endpoint that decapsulates user IP traffic and routes/NATs it.
 
 A separate TURN-over-TCP/TLS mode carries STUN/TURN framing over a stream. It requires explicit stream framing and bounded queues; TCP head-of-line blocking and retransmission behavior differ from UDP.
 
@@ -69,7 +70,7 @@ The client-side TURN adapter must implement and test the actual TURN lifecycle, 
 - implement bounded retransmission, keepalive, cancellation, and cleanup;
 - never reuse credentials or allocations across a different call/session unless the provider explicitly permits it.
 
-The GHONCHA server is the TURN peer: the VK relay forwards peer datagrams to a UDP socket on the configured GHONCHA gateway address. The gateway does not need to create a second TURN allocation for this topology. That UDP socket feeds the DTLS server endpoint; after peer authentication and record validation, the gateway forwards tunnel datagrams to a loopback or otherwise tightly scoped VPN backend. It must not expose a generic unauthenticated UDP forwarder to the public internet.
+The GHONCHA server is the TURN peer: the VK relay forwards peer datagrams to a UDP socket on the configured GHONCHA gateway address. The gateway does not need to create a second TURN allocation for this topology. That UDP socket feeds the DTLS server endpoint; after pinned DTLS peer authentication and record validation, the gateway extracts the inner WireGuard datagram and passes it to the WireGuard endpoint. It must not expose a generic unauthenticated UDP forwarder to the public internet.
 
 TURN allocation, TURN permission, channel binding, DTLS session, GHONCHA peer authentication, and VPN data-plane health are separate states. A successful Allocate does not mean the VPN tunnel is connected.
 
@@ -78,11 +79,11 @@ TURN allocation, TURN permission, channel binding, DTLS session, GHONCHA peer au
 The reference projects use DTLS 1.2 between client and server, with TURN carrying the DTLS records. This is distinct from the DTLS/SRTP association between ordinary WebRTC media endpoints.
 
 GHONCHA requirements:
-- use a maintained DTLS implementation and standard cipher suites; do not implement DTLS or cryptographic primitives from scratch;
-- authenticate the GHONCHA server independently, e.g. by a pinned public key/fingerprint or an authenticated handshake bound to the provisioned peer identity;
-- never set certificate verification to insecure/skip-verify in production;
-- use a distinct GHONCHA session key schedule and replay protection; TURN credentials are not tunnel encryption keys;
-- enforce packet and handshake size limits, retransmission/deadline bounds, replay windows, and key rotation;
+- use standard WireGuard for inner VPN peer authentication, key establishment, replay protection, and IP-packet encryption; do not invent a parallel GHONCHA AEAD/key schedule;
+- use a maintained DTLS implementation for the VK transport carrier and standard cipher suites; do not implement DTLS or cryptographic primitives from scratch;
+- authenticate the DTLS gateway independently, e.g. by a pinned public key/certificate fingerprint or a provisioned PSK; DTLS authentication must not be inferred from TURN credentials or a VK call link;
+- never accept an unpinned self-signed certificate or set certificate verification to insecure/skip-verify in production;
+- enforce packet and handshake size limits, retransmission/deadline bounds, DTLS replay windows, and session/key lifetime limits;
 - fail closed on peer identity mismatch, malformed records, authentication failure, or replay;
 - fuzz the DTLS integration and all framing/decoding boundaries.
 
@@ -112,8 +113,8 @@ Do not copy published throughput claims or assume a fixed worker count, TURN IP 
 
 Recommended GHONCHA ownership:
 - Kotlin Android layer: `VpnService`, user consent/auth UI, call-link/account input, interactive security challenges, `ConnectivityManager`, socket protection/binding, TUN FD creation/ownership.
-- Rust client core: VK credential-provider abstraction, TURN protocol engine, DTLS session, GHONCHA peer authentication, bounded packet pools/queues, worker policy, reconnect state machine, statistics.
-- Rust server: TURN-facing DTLS listener, peer authentication, decapsulation, gateway forwarding, rate/resource limits, observability.
+- Rust client core: VK credential-provider abstraction, TURN protocol engine, DTLS carrier session, WireGuard tunnel endpoint, bounded packet pools/queues, worker policy, reconnect state machine, statistics.
+- Rust server: public UDP TURN-peer socket, DTLS server endpoint, WireGuard gateway endpoint, IP forwarding, rate/resource limits, observability.
 - FFI: control plane only. No packet-per-call JNI/UniFFI/JNA crossings. Keep packet movement and TURN/DTLS processing inside Rust.
 
 Credential provider contract:
