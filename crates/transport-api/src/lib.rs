@@ -995,7 +995,7 @@ mod stream_framing_tests {
             StreamDecodeOutcome::NeedMore { consumed: 4 }
         );
         assert_eq!(
-            decoder.feed(&[b's', b't'], &mut output).unwrap(),
+            decoder.feed(b"st", &mut output).unwrap(),
             StreamDecodeOutcome::Record {
                 consumed: 2,
                 len: 4
