@@ -409,6 +409,302 @@ pub trait RecordTransport {
     fn close(&mut self, reason: CloseReason);
 }
 
+/// Errors from the bounded length-prefixed stream framing primitives.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamFrameError {
+    ZeroLengthRecord,
+    RecordTooLarge { maximum: usize, actual: usize },
+    FrameBufferTooSmall { maximum_frame: usize, required: usize },
+    QueueFull,
+    QueueByteLimitReached { maximum: usize, queued: usize, incoming: usize },
+    NoPendingFrame,
+    NoProgress,
+    WriteExceedsPending { remaining: usize, attempted: usize },
+    DecoderFailed,
+}
+
+/// Progress from feeding a byte stream into a length-prefixed frame decoder.
+///
+/// consumed counts bytes taken from the supplied input. A BufferTooSmall
+/// result may consume the four-byte length prefix but never consumes payload
+/// bytes until the caller supplies a sufficiently large output buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamDecodeOutcome {
+    NeedMore { consumed: usize },
+    Record { consumed: usize, len: usize },
+    BufferTooSmall { consumed: usize, required: usize },
+}
+
+/// Incremental decoder for four-byte big-endian length-prefixed records.
+///
+/// The decoder handles split headers, split payloads, and multiple coalesced
+/// records. It emits at most one record per call; the caller continues with
+/// the unconsumed input to decode any following record.
+///
+/// When a record spans multiple calls, the caller MUST pass the same backing
+/// output buffer on every call until Record is returned. The decoder stores
+/// only framing state and does not allocate or retain a payload buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StreamFrameDecoder {
+    maximum_record_size: usize,
+    prefix: [u8; 4],
+    prefix_len: usize,
+    expected_len: Option<usize>,
+    payload_written: usize,
+    failed: bool,
+}
+
+impl StreamFrameDecoder {
+    pub const fn new(maximum_record_size: usize) -> Self {
+        Self {
+            maximum_record_size,
+            prefix: [0; 4],
+            prefix_len: 0,
+            expected_len: None,
+            payload_written: 0,
+            failed: false,
+        }
+    }
+
+    pub const fn is_idle(&self) -> bool {
+        !self.failed && self.prefix_len == 0 && self.expected_len.is_none()
+    }
+
+    pub const fn is_failed(&self) -> bool {
+        self.failed
+    }
+
+    /// Consumes input until one complete record is produced or more bytes are needed.
+    pub fn feed(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+    ) -> Result<StreamDecodeOutcome, StreamFrameError> {
+        if self.failed {
+            return Err(StreamFrameError::DecoderFailed);
+        }
+
+        let mut consumed = 0;
+
+        if self.expected_len.is_none() {
+            let prefix_remaining = self.prefix.len() - self.prefix_len;
+            let prefix_bytes = prefix_remaining.min(input.len());
+            self.prefix[self.prefix_len..self.prefix_len + prefix_bytes]
+                .copy_from_slice(&input[..prefix_bytes]);
+            self.prefix_len += prefix_bytes;
+            consumed += prefix_bytes;
+
+            if self.prefix_len < self.prefix.len() {
+                return Ok(StreamDecodeOutcome::NeedMore { consumed });
+            }
+
+            let declared = u32::from_be_bytes(self.prefix) as usize;
+            if declared == 0 {
+                self.failed = true;
+                return Err(StreamFrameError::ZeroLengthRecord);
+            }
+            if declared > self.maximum_record_size {
+                self.failed = true;
+                return Err(StreamFrameError::RecordTooLarge {
+                    maximum: self.maximum_record_size,
+                    actual: declared,
+                });
+            }
+            self.expected_len = Some(declared);
+        }
+
+        let expected = self.expected_len.expect("frame length was initialized");
+        if output.len() < expected {
+            return Ok(StreamDecodeOutcome::BufferTooSmall {
+                consumed,
+                required: expected,
+            });
+        }
+
+        let remaining = expected - self.payload_written;
+        let available = input.len() - consumed;
+        let copied = remaining.min(available);
+        output[self.payload_written..self.payload_written + copied]
+            .copy_from_slice(&input[consumed..consumed + copied]);
+        self.payload_written += copied;
+        consumed += copied;
+
+        if self.payload_written < expected {
+            return Ok(StreamDecodeOutcome::NeedMore { consumed });
+        }
+
+        self.prefix = [0; 4];
+        self.prefix_len = 0;
+        self.expected_len = None;
+        self.payload_written = 0;
+
+        Ok(StreamDecodeOutcome::Record {
+            consumed,
+            len: expected,
+        })
+    }
+}
+
+struct QueuedStreamFrame<const MAX_FRAME: usize> {
+    bytes: [u8; MAX_FRAME],
+    len: usize,
+    offset: usize,
+}
+
+/// Fixed-capacity stream send queue with length framing and partial-write support.
+///
+/// Frames are serialized in FIFO order. A partial socket write advances only
+/// the current frame's offset; the next frame is never interleaved with it.
+pub struct StreamSendQueue<
+    const CAPACITY: usize,
+    const MAX_FRAME: usize,
+    const MAX_QUEUED_BYTES: usize,
+> {
+    entries: [Option<QueuedStreamFrame<MAX_FRAME>>; CAPACITY],
+    head: usize,
+    len: usize,
+    queued_bytes: usize,
+    maximum_record_size: usize,
+}
+
+impl<const CAPACITY: usize, const MAX_FRAME: usize, const MAX_QUEUED_BYTES: usize>
+    StreamSendQueue<CAPACITY, MAX_FRAME, MAX_QUEUED_BYTES>
+{
+    pub fn new(maximum_record_size: usize) -> Self {
+        Self {
+            entries: core::array::from_fn(|_| None),
+            head: 0,
+            len: 0,
+            queued_bytes: 0,
+            maximum_record_size,
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Number of bytes still awaiting successful socket writes.
+    pub const fn queued_bytes(&self) -> usize {
+        self.queued_bytes
+    }
+
+    /// Adds one complete record, encoded as a four-byte big-endian length prefix.
+    pub fn push(&mut self, record: &[u8]) -> Result<(), StreamFrameError> {
+        if record.is_empty() {
+            return Err(StreamFrameError::ZeroLengthRecord);
+        }
+        if record.len() > self.maximum_record_size || record.len() > u32::MAX as usize {
+            return Err(StreamFrameError::RecordTooLarge {
+                maximum: self.maximum_record_size.min(u32::MAX as usize),
+                actual: record.len(),
+            });
+        }
+
+        let frame_len = record
+            .len()
+            .checked_add(4)
+            .ok_or(StreamFrameError::FrameBufferTooSmall {
+                maximum_frame: MAX_FRAME,
+                required: usize::MAX,
+            })?;
+        if frame_len > MAX_FRAME {
+            return Err(StreamFrameError::FrameBufferTooSmall {
+                maximum_frame: MAX_FRAME,
+                required: frame_len,
+            });
+        }
+        if self.len == CAPACITY {
+            return Err(StreamFrameError::QueueFull);
+        }
+        let next_bytes = self.queued_bytes.checked_add(frame_len).ok_or(
+            StreamFrameError::QueueByteLimitReached {
+                maximum: MAX_QUEUED_BYTES,
+                queued: self.queued_bytes,
+                incoming: frame_len,
+            },
+        )?;
+        if next_bytes > MAX_QUEUED_BYTES {
+            return Err(StreamFrameError::QueueByteLimitReached {
+                maximum: MAX_QUEUED_BYTES,
+                queued: self.queued_bytes,
+                incoming: frame_len,
+            });
+        }
+
+        let tail = (self.head + self.len) % CAPACITY;
+        let mut bytes = [0; MAX_FRAME];
+        bytes[..4].copy_from_slice(&(record.len() as u32).to_be_bytes());
+        bytes[4..frame_len].copy_from_slice(record);
+        self.entries[tail] = Some(QueuedStreamFrame {
+            bytes,
+            len: frame_len,
+            offset: 0,
+        });
+        self.len += 1;
+        self.queued_bytes = next_bytes;
+        Ok(())
+    }
+
+    /// Returns the unwritten suffix of the front frame.
+    pub fn front(&self) -> Option<&[u8]> {
+        let entry = self.entries.get(self.head)?.as_ref()?;
+        Some(&entry.bytes[entry.offset..entry.len])
+    }
+
+    /// Advances the front frame by the number of bytes accepted by the socket.
+    ///
+    /// Returns true when that complete frame has been drained. A zero-byte
+    /// write is treated as a terminal no-progress condition by the caller.
+    pub fn advance_written(&mut self, written: usize) -> Result<bool, StreamFrameError> {
+        if self.len == 0 {
+            return Err(StreamFrameError::NoPendingFrame);
+        }
+        if written == 0 {
+            return Err(StreamFrameError::NoProgress);
+        }
+
+        let complete = {
+            let entry = self.entries[self.head]
+                .as_mut()
+                .expect("occupied queue head must contain a frame");
+            let remaining = entry.len - entry.offset;
+            if written > remaining {
+                return Err(StreamFrameError::WriteExceedsPending {
+                    remaining,
+                    attempted: written,
+                });
+            }
+            entry.offset += written;
+            entry.offset == entry.len
+        };
+
+        self.queued_bytes -= written;
+        if complete {
+            self.entries[self.head] = None;
+            self.len -= 1;
+            self.head = if self.head + 1 == CAPACITY {
+                0
+            } else {
+                self.head + 1
+            };
+        }
+        Ok(complete)
+    }
+}
+
+impl<const CAPACITY: usize, const MAX_FRAME: usize, const MAX_QUEUED_BYTES: usize> Default
+    for StreamSendQueue<CAPACITY, MAX_FRAME, MAX_QUEUED_BYTES>
+{
+    fn default() -> Self {
+        Self::new(MAX_FRAME.saturating_sub(4))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,3 +962,176 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod stream_framing_tests {
+    use super::*;
+
+    #[test]
+    fn decoder_handles_split_header_and_payload() {
+        let mut decoder = StreamFrameDecoder::new(32);
+        let mut output = [0; 8];
+
+        assert_eq!(
+            decoder.feed(&[0, 0], &mut output).unwrap(),
+            StreamDecodeOutcome::NeedMore { consumed: 2 }
+        );
+        assert_eq!(
+            decoder.feed(&[0, 4, b't', b'e'], &mut output).unwrap(),
+            StreamDecodeOutcome::NeedMore { consumed: 4 }
+        );
+        assert_eq!(
+            decoder.feed(&[b's', b't'], &mut output).unwrap(),
+            StreamDecodeOutcome::Record {
+                consumed: 2,
+                len: 4
+            }
+        );
+        assert_eq!(&output[..4], b"test");
+        assert!(decoder.is_idle());
+    }
+
+    #[test]
+    fn decoder_emits_one_record_from_coalesced_input() {
+        let mut decoder = StreamFrameDecoder::new(32);
+        let mut output = [0; 8];
+        let input = [0, 0, 0, 2, b'o', b'k', 0, 0, 0, 1, b'!'];
+
+        let first = decoder.feed(&input, &mut output).unwrap();
+        assert_eq!(
+            first,
+            StreamDecodeOutcome::Record {
+                consumed: 6,
+                len: 2
+            }
+        );
+        assert_eq!(&output[..2], b"ok");
+
+        let second = decoder.feed(&input[6..], &mut output).unwrap();
+        assert_eq!(
+            second,
+            StreamDecodeOutcome::Record {
+                consumed: 5,
+                len: 1
+            }
+        );
+        assert_eq!(&output[..1], b"!");
+    }
+
+    #[test]
+    fn decoder_reports_small_buffer_without_consuming_payload() {
+        let mut decoder = StreamFrameDecoder::new(32);
+        let mut small = [0; 2];
+        let input = [0, 0, 0, 4, b'd', b'a', b't', b'a'];
+
+        assert_eq!(
+            decoder.feed(&input, &mut small).unwrap(),
+            StreamDecodeOutcome::BufferTooSmall {
+                consumed: 4,
+                required: 4
+            }
+        );
+
+        let mut large = [0; 4];
+        assert_eq!(
+            decoder.feed(&input[4..], &mut large).unwrap(),
+            StreamDecodeOutcome::Record {
+                consumed: 4,
+                len: 4
+            }
+        );
+        assert_eq!(&large, b"data");
+    }
+
+    #[test]
+    fn decoder_rejects_zero_and_oversized_frames_and_stays_failed() {
+        let mut zero = StreamFrameDecoder::new(16);
+        assert_eq!(
+            zero.feed(&[0, 0, 0, 0], &mut [0; 16]),
+            Err(StreamFrameError::ZeroLengthRecord)
+        );
+        assert!(zero.is_failed());
+        assert_eq!(
+            zero.feed(&[], &mut [0; 16]),
+            Err(StreamFrameError::DecoderFailed)
+        );
+
+        let mut oversized = StreamFrameDecoder::new(16);
+        assert_eq!(
+            oversized.feed(&[0, 0, 0, 17], &mut [0; 32]),
+            Err(StreamFrameError::RecordTooLarge {
+                maximum: 16,
+                actual: 17
+            })
+        );
+    }
+
+    #[test]
+    fn send_queue_preserves_frame_order_across_partial_writes() {
+        let mut queue = StreamSendQueue::<3, 32, 64>::new(28);
+        queue.push(b"first").unwrap();
+        queue.push(b"second").unwrap();
+
+        assert_eq!(queue.front().unwrap(), &[0, 0, 0, 5, b'f', b'i', b'r', b's', b't']);
+        assert!(!queue.advance_written(3).unwrap());
+        assert_eq!(queue.front().unwrap(), &[0, 5, b'f', b'i', b'r', b's', b't']);
+        assert!(!queue.advance_written(2).unwrap());
+        assert_eq!(queue.front().unwrap(), b"first");
+        assert!(queue.advance_written(5).unwrap());
+
+        assert_eq!(
+            queue.front().unwrap(),
+            &[0, 0, 0, 6, b's', b'e', b'c', b'o', b'n', b'd']
+        );
+        assert!(queue.advance_written(10).unwrap());
+        assert!(queue.is_empty());
+        assert_eq!(queue.queued_bytes(), 0);
+    }
+
+    #[test]
+    fn send_queue_enforces_record_frame_and_queue_limits() {
+        let mut queue = StreamSendQueue::<1, 8, 8>::new(8);
+        assert_eq!(
+            queue.push(b"12345"),
+            Err(StreamFrameError::FrameBufferTooSmall {
+                maximum_frame: 8,
+                required: 9
+            })
+        );
+        queue.push(b"1234").unwrap();
+        assert_eq!(queue.queued_bytes(), 8);
+        assert_eq!(queue.push(b"x"), Err(StreamFrameError::QueueFull));
+        assert_eq!(queue.advance_written(1), Ok(false));
+        assert_eq!(queue.queued_bytes(), 7);
+        assert_eq!(
+            queue.push(b"12"),
+            Err(StreamFrameError::QueueByteLimitReached {
+                maximum: 8,
+                queued: 7,
+                incoming: 6
+            })
+        );
+    }
+
+    #[test]
+    fn send_queue_rejects_zero_progress_and_invalid_write_counts() {
+        let mut queue = StreamSendQueue::<2, 32, 64>::new(28);
+        assert_eq!(
+            queue.advance_written(1),
+            Err(StreamFrameError::NoPendingFrame)
+        );
+        queue.push(b"abc").unwrap();
+        assert_eq!(
+            queue.advance_written(0),
+            Err(StreamFrameError::NoProgress)
+        );
+        assert_eq!(
+            queue.advance_written(8),
+            Err(StreamFrameError::WriteExceedsPending {
+                remaining: 7,
+                attempted: 8
+            })
+        );
+    }
+}
+
