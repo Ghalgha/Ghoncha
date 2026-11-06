@@ -137,11 +137,7 @@ impl<const CAPACITY: usize> TurnAllocationManager<CAPACITY> {
     ///
     /// Distinct local socket addresses enforce independent UDP 5-tuples. A
     /// TURN Channel does not count as another Allocation.
-    pub fn insert(
-        &mut self,
-        id: u16,
-        engine: TurnUdpEngine,
-    ) -> Result<(), AllocationManagerError> {
+    pub fn insert(&mut self, id: u16, engine: TurnUdpEngine) -> Result<(), AllocationManagerError> {
         if self.len == CAPACITY {
             return Err(AllocationManagerError::CapacityReached);
         }
@@ -248,10 +244,7 @@ impl<const CAPACITY: usize> TurnAllocationManager<CAPACITY> {
     ///
     /// The caller receives ownership and must send TURN Refresh(0)/Delete
     /// control traffic before closing the corresponding socket.
-    pub fn take_drained(
-        &mut self,
-        id: u16,
-    ) -> Result<TurnUdpEngine, AllocationManagerError> {
+    pub fn take_drained(&mut self, id: u16) -> Result<TurnUdpEngine, AllocationManagerError> {
         let index = self
             .slots
             .iter()
@@ -431,9 +424,7 @@ mod tests {
             manager.take_drained(1),
             Err(AllocationManagerError::InFlightWorkRemains)
         ));
-        manager
-            .update_load(1, AllocationLoad::IDLE)
-            .unwrap();
+        manager.update_load(1, AllocationLoad::IDLE).unwrap();
         let returned = manager.take_drained(1).unwrap();
         assert_eq!(returned.local_addr().port(), 40001);
         assert!(manager.is_empty());
