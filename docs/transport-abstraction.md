@@ -69,7 +69,7 @@ Required semantics:
 - all asynchronous events are associated with a network/session generation;
 - the adapter reports transport health separately from tunnel authentication and useful IP data flow.
 
-The core must process I/O in bounded batches and keep packet movement inside Rust; no per-record FFI calls. The current trait exposes bounded polling, caller-owned receive buffers, and backpressure for individual records. Add batch send/receive methods only when an implementation and benchmark justify their exact buffer/partial-acceptance semantics; do not claim batching exists before it is implemented.
+The core must process I/O in bounded batches and keep packet movement inside Rust; no per-record FFI calls. The trait now exposes caller-owned batch send/receive buffers and explicit partial-acceptance/backpressure results. Its default batch methods preserve correctness by iterating single-record methods; adapters should override them when they can batch queue operations, packetization, or syscalls without changing record ordering or error semantics.
 
 ## 3. Transport capability model
 
