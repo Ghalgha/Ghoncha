@@ -6,22 +6,27 @@ Status: architecture baseline for an experimental, user-authorized transport. Th
 
 The reference implementations use VK Calls as a source of TURN relay service and short-lived TURN credentials. They do not generally tunnel IP packets through the public VK Calls JavaScript SDK's DataChannel API.
 
-The conceptual path is:
+The supplied projects demonstrate more than one outer-carrier variant. The most relevant modern reference, CSQTT, performs a DTLS 1.2 handshake between the client and GHONCHA-like gateway through TURN, negotiates DTLS-SRTP keying material, then carries tunnel payloads in RTP-shaped SRTP packets. It does **not** send the steady-state data path as DTLS record-layer `application_data`.
+
+The proposed GHONCHA path is:
 
 ```text
 Android TUN
   -> GHONCHA Rust packet engine
-  -> standard WireGuard tunnel datagram (inner VPN encryption/authentication)
-  -> DTLS application-data record (outer carrier protection)
+  -> WireGuard tunnel datagram (inner VPN authentication and AEAD)
+  -> RTP packet carrying one opaque GHONCHA record
+  -> SRTP protection using keys exported by DTLS-SRTP
   -> TURN client (Allocate / Permission / ChannelBind / Refresh)
   -> VK Calls TURN relay
-  -> GHONCHA gateway UDP peer socket (publicly reachable)
-  -> DTLS termination and pinned gateway identity check
+  -> GHONCHA gateway UDP peer socket
+  -> SRTP authentication/deprotection and RTP payload extraction
   -> WireGuard peer authentication/decapsulation
   -> VPN gateway / IP forwarding
 ```
 
-The TURN relay forwards DTLS datagrams between the client's allocation and the configured GHONCHA gateway peer. The relay is not the VPN gateway and must not possess DTLS or WireGuard keys. DTLS protects the carrier hop between the GHONCHA client and gateway; WireGuard remains the inner VPN protocol and the authoritative peer identity for user IP traffic. The VPN gateway is the only endpoint that decapsulates user IP traffic and routes/NATs it.
+DTLS is used for authenticated key agreement and peer authentication; SRTP protects the RTP data packets after the handshake. TURN relays the resulting UDP datagrams to the configured GHONCHA gateway peer. The relay is not the VPN gateway and must not possess SRTP or WireGuard keys. WireGuard remains the inner VPN protocol and authoritative identity for user IP traffic. The gateway validates/decrypts the SRTP packet, extracts the complete WireGuard datagram, then passes it to the WireGuard endpoint.
+
+This is the standards-based candidate closest to the observed CSQTT topology. Keep a plain DTLS application-data carrier as a separate experimental profile only; do not mix DTLS application data with a negotiated DTLS-SRTP association. RFC 5764 specifies that after `use_srtp` negotiation, RTP/RTCP data is protected by SRTP and application data is not sent in DTLS application-data records.
 
 A separate TURN-over-TCP/TLS mode carries STUN/TURN framing over a stream. It requires explicit stream framing and bounded queues; TCP head-of-line blocking and retransmission behavior differ from UDP.
 
@@ -70,24 +75,30 @@ The client-side TURN adapter must implement and test the actual TURN lifecycle, 
 - implement bounded retransmission, keepalive, cancellation, and cleanup;
 - never reuse credentials or allocations across a different call/session unless the provider explicitly permits it.
 
-The GHONCHA server is the TURN peer: the VK relay forwards peer datagrams to a UDP socket on the configured GHONCHA gateway address. The gateway does not need to create a second TURN allocation for this topology. That UDP socket feeds the DTLS server endpoint; after pinned DTLS peer authentication and record validation, the gateway extracts the inner WireGuard datagram and passes it to the WireGuard endpoint. It must not expose a generic unauthenticated UDP forwarder to the public internet.
+The GHONCHA server is the TURN peer: the VK relay forwards peer datagrams to a UDP socket on the configured GHONCHA gateway address. The gateway does not need a second TURN allocation for this topology. That socket feeds the DTLS-SRTP endpoint during handshake and the SRTP/RTP decoder after handshake. The gateway authenticates the DTLS peer, validates SRTP authentication/replay state, extracts the opaque WireGuard datagram, and passes it to the WireGuard endpoint. It must not expose a generic unauthenticated UDP forwarder to the public internet.
 
 TURN allocation, TURN permission, channel binding, DTLS session, GHONCHA peer authentication, and VPN data-plane health are separate states. A successful Allocate does not mean the VPN tunnel is connected.
 
-## 5. DTLS and end-to-end security
+## 5. DTLS-SRTP, SRTP, and inner VPN security
 
-The reference projects use DTLS 1.2 between client and server, with TURN carrying the DTLS records. This is distinct from the DTLS/SRTP association between ordinary WebRTC media endpoints.
+The CSQTT source inspected on 2026-11-06 contains a DTLS 1.2 handshake implementation that negotiates SRTP keying material. Its server then uses those keys to process RTP/SRTP-shaped tunnel packets. This is materially different from wrapping every VPN datagram in a DTLS application-data record.
 
 GHONCHA requirements:
-- use standard WireGuard for inner VPN peer authentication, key establishment, replay protection, and IP-packet encryption; do not invent a parallel GHONCHA AEAD/key schedule;
-- use a maintained DTLS implementation for the VK transport carrier and standard cipher suites; do not implement DTLS or cryptographic primitives from scratch;
-- authenticate the DTLS gateway independently, e.g. by a pinned public key/certificate fingerprint or a provisioned PSK; DTLS authentication must not be inferred from TURN credentials or a VK call link;
-- never accept an unpinned self-signed certificate or set certificate verification to insecure/skip-verify in production;
-- enforce packet and handshake size limits, retransmission/deadline bounds, DTLS replay windows, and session/key lifetime limits;
-- fail closed on peer identity mismatch, malformed records, authentication failure, or replay;
-- fuzz the DTLS integration and all framing/decoding boundaries.
+- use standard WireGuard for inner VPN peer authentication, key establishment, replay protection, and IP-packet encryption; do not invent a GHONCHA-specific AEAD or key schedule;
+- use a maintained DTLS implementation for the DTLS-SRTP handshake and a maintained SRTP implementation for packet protection; do not implement either protocol or cryptographic primitives from scratch;
+- authenticate the DTLS gateway independently through a provisioned certificate/public-key fingerprint or another explicitly reviewed identity mechanism; TURN credentials and VK call links are not gateway identity;
+- validate the peer certificate/fingerprint before accepting exported SRTP keying material or sending tunnel data;
+- prefer an AEAD SRTP profile such as `SRTP_AEAD_AES_128_GCM` (profile 0x0007) when both peers support it; compare profile support and performance before selection. Do not silently fall back to unauthenticated or weak profiles;
+- enforce RTP/SRTP packet-size limits, per-SSRC sequence/rollover handling, replay windows, key lifetime limits, handshake deadlines, and bounded retransmission;
+- fail closed on peer identity mismatch, SRTP authentication failure, malformed RTP headers, replay, or key expiry;
+- fuzz the DTLS handshake, RTP parser, SRTP context, and TURN framing boundaries.
 
-One reviewed Rust reference configuration sets `insecure_skip_verify = true` for a self-signed certificate. That is a research implementation detail and is **not** an acceptable production security policy for GHONCHA.
+Candidate Rust components as of 2026-11-06:
+- `dimpl 0.9.0`: Sans-I/O DTLS 1.2/1.3 candidate with DTLS-SRTP key export. Its documentation states that the application must validate the peer certificate; the crate does not perform PKI/fingerprint validation itself.
+- `rtc-srtp 0.21.1`: Sans-I/O SRTP/SRTCP candidate with RTP/RTCP protection, replay protection, and rollover-counter tracking. It documents profiles including AES-128-CM-SHA1-80 and AEAD-AES-128-GCM.
+- These versions are interoperability-spike candidates, not approved production dependencies. Confirm that the exact `dimpl` API negotiates the intended `use_srtp` profile with the chosen SRTP crate, then test against an independent implementation and the GHONCHA gateway.
+
+A plain DTLS application-data tunnel is a separate possible carrier profile. If selected, it must use a normal DTLS association without negotiating `use_srtp`; never send application-data records after establishing a DTLS-SRTP association. The CSQTT source also contains custom DTLS/SRTP-related code; it is a protocol-behavior reference, not code to copy. Its current repository license is PolyForm Noncommercial 1.0.0, so GHONCHA must not incorporate its source without separate licensing permission.
 
 ## 6. Transport modes and performance
 
@@ -113,8 +124,8 @@ Do not copy published throughput claims or assume a fixed worker count, TURN IP 
 
 Recommended GHONCHA ownership:
 - Kotlin Android layer: `VpnService`, user consent/auth UI, call-link/account input, interactive security challenges, `ConnectivityManager`, socket protection/binding, TUN FD creation/ownership.
-- Rust client core: VK credential-provider abstraction, TURN protocol engine, DTLS carrier session, WireGuard tunnel endpoint, bounded packet pools/queues, worker policy, reconnect state machine, statistics.
-- Rust server: public UDP TURN-peer socket, DTLS server endpoint, WireGuard gateway endpoint, IP forwarding, rate/resource limits, observability.
+- Rust client core: VK credential-provider abstraction, TURN protocol engine, DTLS-SRTP handshake, SRTP/RTP packet protection, WireGuard tunnel endpoint, bounded packet pools/queues, worker policy, reconnect state machine, statistics.
+- Rust server: public UDP TURN-peer socket, DTLS-SRTP handshake endpoint, SRTP/RTP packet protection, WireGuard gateway endpoint, IP forwarding, rate/resource limits, observability.
 - FFI: control plane only. No packet-per-call JNI/UniFFI/JNA crossings. Keep packet movement and TURN/DTLS processing inside Rust.
 
 Credential provider contract:
@@ -151,7 +162,7 @@ These repositories are implementation references, not production security audits
 Before production integration:
 1. Validate the current VK Calls credential bootstrap with a test account and user-authorized call. Record only non-secret request/response schemas and failure categories.
 2. Separate documented public VK API methods from undocumented Calls backend methods in the provider implementation and documentation.
-3. Implement a standalone TURN/DTLS interoperability test between GHONCHA client and server, without TUN.
+3. Implement a standalone TURN + DTLS-SRTP + SRTP interoperability test between GHONCHA client and server, without TUN. Keep a separate DTLS application-data experiment only if a concrete deployment requirement justifies it.
 4. Validate peer authentication and replay protection independently of TURN credentials.
 5. Run TURN conformance tests for UDP, TCP, and TLS, including allocation refresh, permission, channel binding, nonce rotation, and cleanup.
 6. Complete security review, fuzzing, Android lifecycle tests, and real-device performance/battery benchmarks.
