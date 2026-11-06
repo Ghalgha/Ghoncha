@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/packet",
+    "crates/flow-dispatch",
     "crates/transport-api",
     "crates/transport-turn",
 ]
