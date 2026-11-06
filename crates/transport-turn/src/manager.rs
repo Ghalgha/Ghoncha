@@ -8,6 +8,9 @@
 
 use core::net::SocketAddr;
 
+use ghoncha_flow_dispatch::{DispatchDecision, DispatchError, FlowDispatcher, Worker};
+use ghoncha_packet::flow::FlowKey;
+
 use crate::TurnUdpEngine;
 
 /// Initial admission threshold. This is a tunable starting point, not a
@@ -60,6 +63,7 @@ pub enum AllocationManagerError {
     UnknownAllocation,
     NotDraining,
     InFlightWorkRemains,
+    Dispatch(DispatchError),
 }
 
 /// Owns a single TURN engine and its scheduling observations.
@@ -97,18 +101,20 @@ impl ManagedAllocation {
 /// Capacity is supplied by the adapter/runtime, not hard-coded as a product
 /// limit. Each slot owns a distinct engine, whose local socket address must be
 /// unique within this manager.
-pub struct TurnAllocationManager<const CAPACITY: usize> {
+pub struct TurnAllocationManager<const CAPACITY: usize, const FLOW_CAPACITY: usize = 1024> {
     slots: [Option<ManagedAllocation>; CAPACITY],
     len: usize,
     saturation_threshold_ppm: u32,
+    flow_dispatcher: FlowDispatcher<FLOW_CAPACITY>,
 }
 
-impl<const CAPACITY: usize> TurnAllocationManager<CAPACITY> {
+impl<const CAPACITY: usize, const FLOW_CAPACITY: usize> TurnAllocationManager<CAPACITY, FLOW_CAPACITY> {
     pub fn new() -> Self {
         Self {
             slots: core::array::from_fn(|_| None),
             len: 0,
             saturation_threshold_ppm: DEFAULT_SATURATION_THRESHOLD_PPM,
+            flow_dispatcher: FlowDispatcher::new(),
         }
     }
 
@@ -231,6 +237,27 @@ impl<const CAPACITY: usize> TurnAllocationManager<CAPACITY> {
         }
     }
 
+    /// Assigns a parsed inner flow to one active Allocation.
+    /// Existing flows stay pinned; remapping occurs only after worker loss.
+    pub fn dispatch_flow(&mut self, key: FlowKey, now_ns: u64) -> Result<DispatchDecision, AllocationManagerError> {
+        let mut workers = [Worker { id: 0, eligible: false }; CAPACITY];
+        let mut count = 0;
+        for slot in self.slots.iter().flatten() {
+            workers[count] = Worker { id: slot.id, eligible: slot.state == AllocationState::Active };
+            count += 1;
+        }
+        self.flow_dispatcher.dispatch(key, now_ns, &workers[..count]).map_err(AllocationManagerError::Dispatch)
+    }
+
+    /// Expires idle flow entries with an explicit scan budget.
+    pub fn expire_idle_flows(&mut self, now_ns: u64, idle_timeout_ns: u64, max_scan: usize) -> usize {
+        self.flow_dispatcher.expire_idle(now_ns, idle_timeout_ns, max_scan)
+    }
+
+    pub const fn flow_dispatch_metrics(&self) -> ghoncha_flow_dispatch::DispatchMetrics {
+        self.flow_dispatcher.metrics()
+    }
+
     /// Stops assigning new flows to this Allocation.
     pub fn begin_drain(&mut self, id: u16) -> Result<(), AllocationManagerError> {
         let slot = self
@@ -284,7 +311,7 @@ impl<const CAPACITY: usize> TurnAllocationManager<CAPACITY> {
     }
 }
 
-impl<const CAPACITY: usize> Default for TurnAllocationManager<CAPACITY> {
+impl<const CAPACITY: usize, const FLOW_CAPACITY: usize> Default for TurnAllocationManager<CAPACITY, FLOW_CAPACITY> {
     fn default() -> Self {
         Self::new()
     }
