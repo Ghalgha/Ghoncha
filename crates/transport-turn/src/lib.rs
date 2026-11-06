@@ -1577,6 +1577,7 @@ pub enum TurnReactorError {
 struct TurnReactorSlot {
     allocation_id: u16,
     deadline: Option<MonotonicTime>,
+    ready: bool,
 }
 
 /// Fixed-capacity, allocation-free timer scheduler for a shared TURN reactor.
@@ -1629,6 +1630,7 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
         self.slots[index] = Some(TurnReactorSlot {
             allocation_id,
             deadline: None,
+            ready: false,
         });
         self.len += 1;
         Ok(())
@@ -1645,11 +1647,11 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
         Ok(())
     }
 
-    /// Marks an Allocation immediately due after socket readiness or a
-    /// protocol event. The caller should then poll it and schedule its result.
+    /// Queues an Allocation for immediate service after socket readiness or
+    /// a protocol event, without fabricating a monotonic timer deadline.
     pub fn wake(&mut self, allocation_id: u16) -> Result<(), TurnReactorError> {
         let slot = self.find_mut(allocation_id)?;
-        slot.deadline = Some(MonotonicTime(0));
+        slot.ready = true;
         Ok(())
     }
 
@@ -1703,10 +1705,11 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
             self.cursor = (self.cursor + 1) % CAPACITY;
             scanned += 1;
             if let Some(slot) = self.slots[index].as_mut()
-                && slot.deadline.is_some_and(|deadline| deadline <= now)
+                && (slot.ready || slot.deadline.is_some_and(|deadline| deadline <= now))
             {
                 output[written] = slot.allocation_id;
                 written += 1;
+                slot.ready = false;
                 slot.deadline = None;
             }
         }
@@ -1773,11 +1776,20 @@ mod reactor_tests {
     }
 
     #[test]
-    fn reactor_wake_and_unregister_are_explicit() {
+    fn reactor_wake_is_immediate_work_not_a_fake_timer() {
         let mut reactor = TurnUdpReactor::<2>::new();
         reactor.register(4).unwrap();
+        reactor.schedule(4, MonotonicTime(500)).unwrap();
         reactor.wake(4).unwrap();
-        assert_eq!(reactor.next_deadline(), Some(MonotonicTime(0)));
+        assert_eq!(reactor.next_deadline(), Some(MonotonicTime(500)));
+
+        let mut due = [0; 1];
+        assert_eq!(reactor.take_due(MonotonicTime(100), &mut due, 2), 1);
+        assert_eq!(due[0], 4);
+        assert_eq!(reactor.next_deadline(), None);
+        assert_eq!(reactor.take_due(MonotonicTime(100), &mut due, 2), 0);
+
+        reactor.wake(4).unwrap();
         reactor.unregister(4).unwrap();
         assert_eq!(reactor.next_deadline(), None);
         assert_eq!(
