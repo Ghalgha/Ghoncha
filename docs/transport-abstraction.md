@@ -176,8 +176,9 @@ Do not add all crates at once. Add and test one crate at a time. Do not pin TURN
 
 `turn-client-proto 0.7.3` from `ystreet/turn-proto` is the leading candidate for an interoperability spike:
 - Sans-I/O design separates protocol state from sockets and runtime.
-- Documentation lists RFC 8656, IPv6, UDP and TCP client support.
-- TLS and DTLS integrations are separate extension crates.
+- Version 0.7.3 documentation lists RFC 8656, IPv6, UDP and TCP client support.
+- For the reference VK proxy topology, start with the UDP TURN client: TURN/UDP is the outer hop to the VK relay. The GHONCHA client-to-gateway DTLS association is application data sent to the gateway peer through TURN; it is not DTLS between the client and the VK TURN server.
+- The crate also documents separate TLS-over-TCP and DTLS-over-UDP client extension crates. Those secure the client-to-TURN-server hop and are not interchangeable with the end-to-end DTLS carrier used by the reference projects.
 - It uses `turn-types` / `stun-proto` and has a documented API.
 - It is not yet selected for production. Verify its exact RFC 8656 coverage, VK server interoperability, credential/nonce behavior, Android cross-compilation, dependency graph, allocation behavior and license.
 
@@ -185,10 +186,11 @@ The CSQTT TURN engine remains an important comparison implementation. Compare wi
 
 ### DTLS
 
-`dimpl 0.9.0` is a Sans-I/O DTLS 1.2/1.3 candidate with explicit version constructors and a low-overhead/event-loop-oriented design. It is not automatically a production choice:
-- prove DTLS 1.2 interoperability with the reference VK TURN client/server behavior;
+`dimpl 0.9.0` (released 2026-10-25) is a Sans-I/O DTLS 1.2/1.3 candidate with explicit version constructors and an event-loop-oriented design. It is a candidate for the **client-to-GHONCHA-gateway application DTLS association**, not a TURN client and not the TURN-to-relay security wrapper.
+- prove DTLS 1.2 interoperability with the reference CSQTT/WDTT client and server wire behavior;
 - verify certificate or PSK peer authentication and reject insecure verification shortcuts;
-- test retransmission, fragmentation, replay handling, key updates/lifecycle and malformed records;
+- the library exposes the peer certificate but explicitly leaves PKI/fingerprint/name validation to the application; GHONCHA must implement and test strict pin/identity validation;
+- test retransmission, fragmentation, replay handling, key lifecycle and malformed records;
 - verify Android NDK targets and crypto dependency portability;
 - review the project's security history and license.
 
