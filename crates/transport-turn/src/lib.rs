@@ -1062,6 +1062,15 @@ impl<
         &self.engine
     }
 
+    /// Borrows the owned socket so the shared reactor can register its readiness.
+    ///
+    /// This does not transfer ownership or permit bypassing the driver's bounded
+    /// send/receive queues. The reactor should use the platform-specific raw
+    /// handle exposed by `S` only for readiness registration and cancellation.
+    pub const fn socket(&self) -> &S {
+        &self.socket
+    }
+
     pub const fn queued_control(&self) -> usize {
         self.queues.control_len()
     }
