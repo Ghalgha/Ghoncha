@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use ghoncha_transport_api::MonotonicTime;
 use ghoncha_transport_turn::{
-    DatagramFlushResult, DatagramSendAttempt, DatagramSocketError, TurnDatagramSocket,
+    DatagramFlushResult, DatagramSocketError, TurnDatagramSocket,
     TurnRelayFamilies, TurnUdpDriver, TurnUdpEngine,
 };
 use turn_client_proto::types::Instant;
@@ -325,7 +325,7 @@ fn socket_owning_driver_retains_control_datagram_across_would_block() {
         block_next_send: true,
     };
 
-    let mut driver = TurnUdpDriver::new(
+    let mut driver = TurnUdpDriver::<_, 32, 32, 1500, 8192, 65536>::new(
         socket,
         server_addr,
         "ghoncha-test-user",
