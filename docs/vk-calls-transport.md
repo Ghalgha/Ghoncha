@@ -6,7 +6,7 @@ Status: architecture baseline for an experimental, user-authorized transport. Th
 
 The reference implementations use VK Calls as a source of TURN relay service and short-lived TURN credentials. They do not generally tunnel IP packets through the public VK Calls JavaScript SDK's DataChannel API.
 
-The supplied projects demonstrate more than one outer-carrier variant. The most relevant modern reference, CSQTT, performs a DTLS 1.2 handshake between the client and GHONCHA-like gateway through TURN, negotiates DTLS-SRTP keying material, then carries tunnel payloads in RTP-shaped SRTP packets. It does **not** send the steady-state data path as DTLS record-layer `application_data`.
+The supplied projects demonstrate several incompatible outer-carrier variants. The older Go and Rust proxies carry tunnel bytes as DTLS application data. The Android Go reference uses DTLS application data plus a separate ChaCha20-Poly1305 RTP-shaped wrapper. CSQTT implements a custom DTLS 1.2 handshake and negotiates `use_srtp` keying material, but its subsequent Rust `ObfsCipher` is a proprietary AES-CTR/HMAC-SHA1 RTP-shaped carrier, not standards-compliant RFC 3711 SRTP. These projects demonstrate the VK Calls → TURN → DTLS topology; they do not define one interoperable wire protocol.
 
 The proposed GHONCHA path is:
 
@@ -26,7 +26,7 @@ Android TUN
 
 DTLS is used for authenticated key agreement and peer authentication; SRTP protects the RTP data packets after the handshake. TURN relays the resulting UDP datagrams to the configured GHONCHA gateway peer. The relay is not the VPN gateway and must not possess SRTP or WireGuard keys. WireGuard remains the inner VPN protocol and authoritative identity for user IP traffic. The gateway validates/decrypts the SRTP packet, extracts the complete WireGuard datagram, then passes it to the WireGuard endpoint.
 
-This is the standards-based candidate closest to the observed CSQTT topology. Keep a plain DTLS application-data carrier as a separate experimental profile only; do not mix DTLS application data with a negotiated DTLS-SRTP association. RFC 5764 specifies that after `use_srtp` negotiation, RTP/RTCP data is protected by SRTP and application data is not sent in DTLS application-data records.
+This is GHONCHA's proposed standards-based candidate based on the observed TURN + DTLS + RTP-shaped topology; it is not wire-compatible with the proprietary CSQTT wrapper. Keep a plain DTLS application-data carrier as a separate experimental profile only; do not mix DTLS application data with a negotiated DTLS-SRTP association. RFC 5764 specifies that after `use_srtp` negotiation, RTP/RTCP data is protected by SRTP and application data is not sent in DTLS application-data records.
 
 ### Initial GHONCHA RTP payload profile
 
@@ -91,9 +91,15 @@ The GHONCHA server is the TURN peer: the VK relay forwards peer datagrams to a U
 
 TURN allocation, TURN permission, channel binding, DTLS session, GHONCHA peer authentication, and VPN data-plane health are separate states. A successful Allocate does not mean the VPN tunnel is connected.
 
+### Reference-specific TURN compatibility notes
+
+- CSQTT adds optional STUN attribute `0x8021` with value `fc 09 b4 6f` to its control requests. Other supplied Pion-based references use ordinary TURN without this attribute. GHONCHA must treat it as an optional provider compatibility profile and verify it against live VK TURN endpoints before enabling it.
+- The current GHONCHA TURN adapter uses standard TURN attributes and does not yet inject that custom attribute. It also relies on TURN allocation/permission/channel refresh; the upstream client has no explicit periodic ChannelData keepalive API. The upper DTLS layer must own an authenticated, adaptive heartbeat rather than sending arbitrary dummy payloads.
+- Reference keepalive intervals vary: CSQTT uses approximately 10 seconds and the Android Go reference approximately 15 seconds. These are starting points for measurement, not universal constants. Mobile radio energy and observed NAT expiry must determine the production interval.
+
 ## 5. DTLS-SRTP, SRTP, and inner VPN security
 
-The CSQTT source inspected on 2026-11-06 contains a DTLS 1.2 handshake implementation that negotiates SRTP keying material. Its server then uses those keys to process RTP/SRTP-shaped tunnel packets. This is materially different from wrapping every VPN datagram in a DTLS application-data record.
+The CSQTT source inspected on 2026-11-06 contains a hand-written DTLS 1.2 handshake that negotiates SRTP exporter material. Its subsequent `ObfsCipher` uses a custom AES-128-CTR/HMAC-SHA1 key derivation and packet format; this is not standard SRTP and must not be treated as interoperable with a standards-based SRTP stack. The other supplied proxies use DTLS application data, sometimes with a separate custom AEAD wrapper.
 
 GHONCHA requirements:
 - use standard WireGuard for inner VPN peer authentication, key establishment, replay protection, and IP-packet encryption; do not invent a GHONCHA-specific AEAD or key schedule;
@@ -111,7 +117,7 @@ Candidate Rust components as of 2026-11-06:
 - `srtp 0.7.0`: MIT/Apache Rust wrapper around `libsrtp2`; its `VecLike` interface can protect/unprotect in caller-owned buffers, including fixed-size `Cursor<&mut [u8]>`. This may better fit GHONCHA's bounded data plane. AES-GCM policy constructors require the OpenSSL feature; the native build uses `srtp2-sys 3.0.2` (BSD-3-Clause), bindgen and a C toolchain. Android NDK cross-compilation and binary size remain unresolved.
 - These are interoperability-spike candidates, not approved production dependencies. Verify the exact `dimpl` `use_srtp` negotiation and key exporter with each SRTP implementation, then test against an independent implementation and the GHONCHA gateway. Benchmark allocation count, CPU, throughput, RTT and battery on real Android devices before selecting one.
 
-A plain DTLS application-data tunnel is a separate possible carrier profile. If selected, it must use a normal DTLS association without negotiating `use_srtp`; never send application-data records after establishing a DTLS-SRTP association. The CSQTT source also contains custom DTLS/SRTP-related code; it is a protocol-behavior reference, not code to copy. Its current repository license is PolyForm Noncommercial 1.0.0, so GHONCHA must not incorporate its source without separate licensing permission.
+A plain DTLS application-data tunnel is a separate possible carrier profile. If selected, it must use a normal DTLS association without negotiating `use_srtp`; never send application-data records after establishing a DTLS-SRTP association. CSQTT's client exposes fingerprint pinning but its current `run_dtls_handshake` path does not call it, and `SrtpMode::Auto` can fall back to its custom Wrap carrier after DTLS failure. GHONCHA must validate gateway identity and fail closed rather than silently downgrade. Its current repository license is PolyForm Noncommercial 1.0.0, so GHONCHA must not incorporate its source without separate licensing permission.
 
 ## 6. Transport modes and performance
 
