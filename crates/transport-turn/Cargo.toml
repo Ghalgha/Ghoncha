@@ -1,0 +1,17 @@
+[package]
+name = "ghoncha-transport-turn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+std = ["turn-client-proto/std"]
+
+[dependencies]
+ghoncha-transport-api = { path = "../transport-api" }
+turn-client-proto = { version = "=0.7.3", default-features = false }
