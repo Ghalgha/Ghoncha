@@ -328,7 +328,10 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         let slot = self
             .get_mut(id)
             .ok_or(AllocationManagerError::UnknownAllocation)?;
-        if !matches!(slot.state, AllocationState::Draining | AllocationState::Unhealthy) {
+        if !matches!(
+            slot.state,
+            AllocationState::Draining | AllocationState::Unhealthy
+        ) {
             return Err(AllocationManagerError::InvalidStateTransition);
         }
         if slot.load.in_flight_packets != 0 || slot.load.queued_bytes != 0 {
@@ -391,7 +394,10 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         let slot = self
             .get_mut(id)
             .ok_or(AllocationManagerError::UnknownAllocation)?;
-        if !matches!(slot.state, AllocationState::Active | AllocationState::Draining) {
+        if !matches!(
+            slot.state,
+            AllocationState::Active | AllocationState::Draining
+        ) {
             return Err(AllocationManagerError::InvalidStateTransition);
         }
         slot.state = AllocationState::Unhealthy;
@@ -761,10 +767,7 @@ mod tests {
             manager.begin_deallocation(1),
             Err(AllocationManagerError::InvalidStateTransition)
         );
-        assert_eq!(
-            manager.take_drained(1).unwrap().local_addr().port(),
-            40001
-        );
+        assert_eq!(manager.take_drained(1).unwrap().local_addr().port(), 40001);
     }
 
     #[test]
