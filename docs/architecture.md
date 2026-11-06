@@ -15,7 +15,7 @@ Status: design baseline; implementation choices remain subject to interoperabili
 1. **Android client** owns the `VpnService`, TUN descriptor, network callbacks, and Android-specific routing/protection.
 2. **Rust client core** owns tunnel state, packet processing, transport selection, TURN client state, and statistics.
 3. **TURN relay** implements RFC 8656. It authenticates and allocates relay resources, applies peer permissions, and forwards opaque datagrams. It is not the VPN gateway.
-4. **VPN gateway** terminates the WireGuard peer session, validates/decrypts tunnel packets, routes inner IPv4/IPv6 packets, applies forwarding policy and NAT where configured, and returns packets through the tunnel.
+4. **VPN gateway** receives VK-relayed DTLS datagrams on its public UDP peer socket, terminates the application-level DTLS carrier, passes the inner WireGuard datagrams to the WireGuard endpoint for peer authentication and decryption, routes inner IPv4/IPv6 packets, applies forwarding policy and NAT where configured, and returns packets through the same layered path.
 5. **Rust server control plane** provisions peers, keys, addresses, routes, quotas, and gateway lifecycle. It must not handle every packet in a high-level request/task abstraction.
 6. **VK Calls TURN provider/transport (experimental)** obtains short-lived TURN credentials and relay URIs from a user-authorized VK Calls session, then carries GHONCHA's DTLS-protected tunnel traffic over TURN. The VK TURN relay forwards opaque traffic; it is not the VPN gateway or GHONCHA identity endpoint. Public VK API methods and Calls-specific undocumented bootstrap endpoints must remain clearly separated. Details and reference audit: `docs/vk-calls-transport.md` and `docs/vk-turn-reference-audit.md`.
 
