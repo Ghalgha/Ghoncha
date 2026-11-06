@@ -306,6 +306,7 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         if slot.load.in_flight_packets != 0 {
             return Err(AllocationManagerError::InFlightWorkRemains);
         }
+        self.flow_dispatcher.forget_worker(id);
         let allocation = self.slots[index]
             .take()
             .expect("located slot must remain occupied");
