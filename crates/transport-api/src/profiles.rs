@@ -37,6 +37,27 @@ pub struct FlowCapabilities {
     pub supports_live_resize: bool,
 }
 
+/// Measurements used by the profile flow-scaling policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FlowObservation {
+    /// Estimated application demand in bits per second.
+    pub requested_goodput_bps: u64,
+    /// Measured aggregate application goodput in bits per second.
+    pub aggregate_goodput_bps: u64,
+    /// Bytes waiting in the bounded packet/transport queues.
+    pub queued_bytes: u32,
+    /// Queue level considered sustained pressure. Zero disables this signal.
+    pub queue_high_watermark_bytes: u32,
+    /// Measured incremental goodput from the most recently added flow.
+    pub last_flow_marginal_goodput_bps: Option<u64>,
+    /// Minimum useful marginal goodput required to justify another flow.
+    pub minimum_useful_marginal_gain_bps: u64,
+    /// Time without application traffic, in nanoseconds.
+    pub idle_for_ns: u64,
+    /// Minimum idle duration before EnergySaving may retire an excess flow.
+    pub shrink_after_idle_ns: u64,
+}
+
 /// A resolved plan for a profile on one specific transport path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FlowPlan {
@@ -133,6 +154,72 @@ impl ConnectionProfile {
 }
 
 impl FlowPlan {
+    /// Chooses at most one flow-count step from current measurements.
+    ///
+    /// The caller remains responsible for applying the change asynchronously,
+    /// observing the result, and preserving in-flight records. This policy does
+    /// not assume a fixed per-flow throughput; it uses measured marginal gain.
+    pub const fn recommend_next_count(
+        self,
+        current_flows: u16,
+        observation: FlowObservation,
+    ) -> Option<u16> {
+        if current_flows == 0 {
+            return Some(1);
+        }
+        if current_flows > self.maximum_flows {
+            return Some(current_flows - 1);
+        }
+
+        match self.scaling_policy {
+            FlowScalingPolicy::StandardRange => {
+                if current_flows < self.initial_target_flows {
+                    self.next_increase(current_flows)
+                } else if current_flows > self.initial_target_flows {
+                    self.next_decrease(current_flows)
+                } else {
+                    None
+                }
+            }
+            FlowScalingPolicy::MaximizeUsefulGoodput => {
+                if current_flows >= self.maximum_flows {
+                    return None;
+                }
+                match observation.last_flow_marginal_goodput_bps {
+                    Some(gain) if gain >= observation.minimum_useful_marginal_gain_bps => {
+                        self.next_increase(current_flows)
+                    }
+                    Some(_) if current_flows > self.minimum_flows => {
+                        self.next_decrease(current_flows)
+                    }
+                    None if current_flows == 1 => self.next_increase(current_flows),
+                    _ => None,
+                }
+            }
+            FlowScalingPolicy::DemandDriven => {
+                let queue_pressure = observation.queue_high_watermark_bytes > 0
+                    && observation.queued_bytes >= observation.queue_high_watermark_bytes;
+                let capacity_pressure =
+                    observation.requested_goodput_bps > observation.aggregate_goodput_bps;
+
+                if (queue_pressure || capacity_pressure)
+                    && current_flows < self.maximum_flows
+                {
+                    self.next_increase(current_flows)
+                } else if !queue_pressure
+                    && !capacity_pressure
+                    && current_flows > self.minimum_flows
+                    && observation.shrink_after_idle_ns > 0
+                    && observation.idle_for_ns >= observation.shrink_after_idle_ns
+                {
+                    self.next_decrease(current_flows)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     /// Plans a live transition to this profile's initial target.
     pub const fn reconfiguration(self, current_flows: u16) -> FlowReconfiguration {
         self.reconfiguration_to(current_flows, self.initial_target_flows)
@@ -173,10 +260,6 @@ impl FlowPlan {
     }
 
     /// Returns the next one-flow increase, bounded by the resolved plan.
-    ///
-    /// The caller must first establish that more capacity is needed and that
-    /// adding a flow is beneficial. This method deliberately makes no network
-    /// or performance assumptions.
     pub const fn next_increase(self, current_flows: u16) -> Option<u16> {
         if current_flows == 0 || current_flows >= self.maximum_flows {
             return None;
@@ -185,9 +268,6 @@ impl FlowPlan {
     }
 
     /// Returns the next one-flow decrease, bounded by the resolved plan.
-    ///
-    /// The caller must ensure that draining the flow will not interrupt
-    /// in-flight records or violate transport lifecycle requirements.
     pub const fn next_decrease(self, current_flows: u16) -> Option<u16> {
         if current_flows <= self.minimum_flows {
             return None;
@@ -205,8 +285,19 @@ mod tests {
         supports_live_resize: true,
     };
 
+    const OBSERVATION: FlowObservation = FlowObservation {
+        requested_goodput_bps: 1_000_000,
+        aggregate_goodput_bps: 2_000_000,
+        queued_bytes: 0,
+        queue_high_watermark_bytes: 64 * 1024,
+        last_flow_marginal_goodput_bps: None,
+        minimum_useful_marginal_gain_bps: 100_000,
+        idle_for_ns: 0,
+        shrink_after_idle_ns: 5_000_000_000,
+    };
+
     #[test]
-    fn unlimited_starts_small_and_can_scale_to_measured_limit() {
+    fn unlimited_starts_small_and_scales_on_measured_marginal_gain() {
         let plan = ConnectionProfile::Unlimited.resolve(LIVE).unwrap();
 
         assert_eq!(plan.initial_flows, 1);
@@ -214,12 +305,19 @@ mod tests {
         assert_eq!(plan.initial_target_flows, 1);
         assert_eq!(plan.maximum_flows, 100);
         assert_eq!(plan.scaling_policy, FlowScalingPolicy::MaximizeUsefulGoodput);
-        assert_eq!(
-            plan.reconfiguration_to(1, 24),
-            FlowReconfiguration::Add { count: 23 }
-        );
-        assert!(!plan.limited_by_transport);
-        assert!(plan.supports_live_resize);
+        assert_eq!(plan.recommend_next_count(1, OBSERVATION), Some(2));
+
+        let useful_gain = FlowObservation {
+            last_flow_marginal_goodput_bps: Some(1_500_000),
+            ..OBSERVATION
+        };
+        assert_eq!(plan.recommend_next_count(2, useful_gain), Some(3));
+
+        let poor_gain = FlowObservation {
+            last_flow_marginal_goodput_bps: Some(10_000),
+            ..OBSERVATION
+        };
+        assert_eq!(plan.recommend_next_count(2, poor_gain), Some(1));
     }
 
     #[test]
@@ -231,6 +329,8 @@ mod tests {
         assert_eq!(plan.initial_target_flows, 35);
         assert_eq!(plan.maximum_flows, 40);
         assert_eq!(plan.scaling_policy, FlowScalingPolicy::StandardRange);
+        assert_eq!(plan.recommend_next_count(34, OBSERVATION), Some(35));
+        assert_eq!(plan.recommend_next_count(36, OBSERVATION), Some(35));
         assert!(!plan.limited_by_transport);
     }
 
@@ -251,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn energy_saving_starts_at_one_and_can_scale_on_demand() {
+    fn energy_saving_adds_capacity_under_demand_or_queue_pressure() {
         let plan = ConnectionProfile::EnergySaving.resolve(LIVE).unwrap();
 
         assert_eq!(plan.initial_flows, 1);
@@ -259,7 +359,36 @@ mod tests {
         assert_eq!(plan.initial_target_flows, 1);
         assert_eq!(plan.maximum_flows, 100);
         assert_eq!(plan.scaling_policy, FlowScalingPolicy::DemandDriven);
-        assert_eq!(plan.next_increase(1), Some(2));
+
+        let demand = FlowObservation {
+            requested_goodput_bps: 5_000_000,
+            aggregate_goodput_bps: 2_000_000,
+            ..OBSERVATION
+        };
+        assert_eq!(plan.recommend_next_count(1, demand), Some(2));
+
+        let queue = FlowObservation {
+            queued_bytes: 64 * 1024,
+            ..OBSERVATION
+        };
+        assert_eq!(plan.recommend_next_count(1, queue), Some(2));
+    }
+
+    #[test]
+    fn energy_saving_retires_excess_flows_only_after_idle_threshold() {
+        let plan = ConnectionProfile::EnergySaving.resolve(LIVE).unwrap();
+
+        let idle = FlowObservation {
+            idle_for_ns: 10_000_000_000,
+            ..OBSERVATION
+        };
+        assert_eq!(plan.recommend_next_count(4, idle), Some(3));
+
+        let recent = FlowObservation {
+            idle_for_ns: 1_000_000_000,
+            ..OBSERVATION
+        };
+        assert_eq!(plan.recommend_next_count(4, recent), None);
     }
 
     #[test]
