@@ -291,8 +291,7 @@ mod tests {
             if self.state != TransportState::Idle {
                 return Err(TransportError::AlreadyStarted);
             }
-            if config.max_record_size == 0
-                || config.max_record_size as usize > self.max_record_size
+            if config.max_record_size == 0 || config.max_record_size as usize > self.max_record_size
             {
                 return Err(TransportError::InvalidConfiguration);
             }
@@ -356,7 +355,10 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(transport.send_record(b"test").unwrap(), SendOutcome::Accepted);
+        assert_eq!(
+            transport.send_record(b"test").unwrap(),
+            SendOutcome::Accepted
+        );
         assert_eq!(
             transport.send_record(b"next").unwrap(),
             SendOutcome::Backpressure
