@@ -1,10 +1,10 @@
 #![no_std]
-
-pub mod flow;
-
+ 
 //! Allocation-free validation and views over IPv4 and IPv6 packets.
 //!
 //! The parser borrows the input buffer and never copies packet contents.
+
+pub mod flow;
 
 /// Minimum IPv4 header size, in bytes.
 pub const IPV4_MIN_HEADER_LEN: usize = 20;
