@@ -1572,6 +1572,14 @@ pub enum TurnReactorError {
     UnknownAllocation,
 }
 
+/// What the platform reactor should service next.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnReactorWakeup {
+    Ready,
+    Deadline(MonotonicTime),
+    Idle,
+}
+
 /// One scheduled TURN Allocation timer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TurnReactorSlot {
