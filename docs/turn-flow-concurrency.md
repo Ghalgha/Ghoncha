@@ -111,6 +111,51 @@ The socket owner must call `VpnService.protect()` before sending through the soc
 
 A dual-stack relay allocation is not automatically two independent concurrency flows. It is one allocation with the address-family behavior negotiated for that allocation. Likewise, multiple peers or channels within one allocation do not increase the independent-allocation count.
 
+## Sans-I/O UDP driver contract
+
+`TurnUdpEngine` is a protocol state machine, not a socket wrapper. The runtime owns the OS UDP socket, readiness registration, buffers, queueing, and scheduling. Keep exactly one driver owner for each socket/engine pair so that datagrams and protocol timers cannot race across independent tasks.
+
+### Socket establishment
+
+1. Resolve the TURN server endpoint using the selected network; do not perform blocking DNS on the packet executor.
+2. Create and bind a UDP socket to an ephemeral local port. Bind it to the active Android `Network`, then call `VpnService.protect()` before the first send so tunnel traffic to the relay cannot recursively enter the VPN.
+3. Read back the actual local socket address and pass that address plus the selected server address to `TurnUdpEngine`. The manager's unique-address check is only a secondary invariant; the runtime must own and verify the actual socket.
+4. Associate the socket and engine with one network-generation identifier. On handover, stop using the old generation and never attach its socket to a replacement engine.
+
+### Receive path
+
+On socket readability, drain a bounded number of datagrams or bytes per scheduler turn. For each datagram, pass the actual source address, exact received byte slice, and monotonic timestamp to `receive_from`. Handle every result explicitly:
+
+- `Handled`: TURN control traffic was consumed by the protocol engine.
+- `PeerData`: deliver the peer address and borrowed payload to the tunnel ingress before reusing the receive buffer.
+- `PeerIcmp`: preserve the peer and ICMP metadata for the gateway's ICMP policy; do not silently reinterpret it as ordinary UDP data.
+- `Ignored`: count and discard the datagram for this allocation. Do not forward it as peer data.
+
+A malformed packet or fatal socket error must affect only its owning allocation. A transient receive-side `WouldBlock` is normal readiness behavior, not an allocation failure. Never retain a borrowed `PeerData` slice after the receive buffer is reused.
+
+### Send path and backpressure
+
+For peer payloads, use `send_to_into` with a reusable caller-owned buffer. Send exactly the returned `len` bytes to the returned TURN-server `destination`; bytes beyond that length are not part of the datagram. For protocol-control traffic, obtain the encoded datagram from `poll_transmit` and send it to its supplied destination.
+
+UDP sends are datagram-atomic: do not split a queued datagram into multiple socket writes. If the socket reports `WouldBlock`, retain the exact encoded bytes and destination in a bounded queue and retry that same datagram when writable. Do not regenerate or overwrite a pending control datagram while it is queued. Bound queues by both datagram count and bytes; if capacity is exhausted, apply explicit backpressure/drop policy and increment a reason-specific counter. A successful socket write is the point at which the runtime may account the datagram as sent.
+
+Treat `EMSGSIZE` as a path/packet-size signal, not automatically as proof that the entire TURN allocation is dead. Feed the observation into the transport's packet-size adaptation and diagnostics. Other persistent socket errors should transition only the affected allocation to unhealthy and begin its bounded recovery path.
+
+### Timers and protocol events
+
+After creation, received datagrams, and relevant state changes, drive `poll`, obtain any pending `poll_transmit` output, and drain `poll_event` until no event remains. Respect the next `WaitUntil` deadline returned by the protocol state machine. Use a shared timer wheel or equivalent scheduler for all allocations; do not create one OS thread or an independent high-frequency polling loop per allocation. Socket readability/writability and shutdown may wake the driver before its timer deadline, in which case re-evaluate the state machine.
+
+The runtime must retain pending encoded output across `WouldBlock` and verify the pinned TURN library's timer/retransmission behavior under delayed socket writes. Do not add a second independent retransmission mechanism on top of the protocol engine. Record timer lateness, control-datagram queue delay, retransmissions, and allocation-state transitions separately from peer payload throughput.
+
+### Required driver tests
+
+- Receive from the configured TURN server is processed; datagrams from an unexpected source are ignored and never surfaced as peer payload.
+- `PeerData` is consumed before the receive buffer is reused; peer address and payload boundaries remain intact.
+- `WouldBlock` on control and peer-data sends retains the exact bytes and destination, then sends one complete datagram when writable.
+- Queue saturation is bounded by bytes and records, does not overwrite pending control messages, and increments explicit drop/backpressure counters.
+- Delayed writes do not break Allocate/authentication, permission, ChannelBind, Refresh, or Delete deadlines and retransmission behavior.
+- `EMSGSIZE`, network handover, fatal socket errors, and stale-generation events cannot revive or corrupt another allocation.
+
 ## Flow manager contract
 
 The future manager should be a bounded control-plane/data-plane component with caller-owned storage. It must:
