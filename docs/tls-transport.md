@@ -1,6 +1,6 @@
 # TLS transport over TURN/TCP
 
-Status: design and implementation contract; no TLS client is implemented yet. The existing `TurnTcpEngine` and `TurnTcpDriver` speak plaintext TURN over an already-connected TCP stream. They must not be described or selected as TURN/TLS until this contract is implemented and tested.
+Status: partial implementation. Rustls 0.23.46 is pinned in `ghoncha-transport-turn`; `TlsClientEngine` and `TlsStreamSocket` provide a nonblocking TLS client stream that can be supplied to `TurnTcpDriver`. The complete TLS handshake, trust-store integration and TLS-enabled TURN server interoperability are not yet tested, so this is not production-ready TURN/TLS.
 
 ## 1. Scope and protocol layering
 
@@ -19,7 +19,7 @@ The TLS adapter must preserve the exact ordered byte stream expected by TURN. It
 
 ## 2. TLS implementation choice
 
-Use Rustls 0.23 API through a small runtime-neutral, nonblocking adapter (the current upstream documentation resolves to 0.23.46; pin an exact reviewed release when dependencies are introduced). Keep Rustls types behind the TLS adapter boundary; the shared packet and transport API crates must not depend on Android, JNI, or a particular async runtime.
+Use Rustls 0.23.46 through a runtime-neutral, nonblocking adapter. The exact version is pinned in `crates/transport-turn/Cargo.toml` and locked in `Cargo.lock`. Rustls types stay behind `TlsClientEngine` / `TlsStreamSocket`; the shared packet and transport API crates do not depend on Android, JNI, or a particular async runtime.
 
 The caller supplies an already-built, verified `Arc<ClientConfig>` and a validated DNS `ServerName`. The adapter creates a `ClientConnection` and exposes explicit handshake/read/write progress. Do not construct a permissive verifier in the transport crate.
 
@@ -52,28 +52,24 @@ For Android, test the actual application build and runtime initialization. A suc
 
 Do not use Rustls `complete_io()` in the event-driven driver: it may block and hides readiness transitions.
 
-The adapter must drive Rustls explicitly:
-1. On socket-readable readiness, read a bounded ciphertext chunk into Rustls with `read_tls`.
-2. Call `process_new_packets` after each successful TLS input operation.
-3. Drain decrypted plaintext through `reader()` into a bounded TURN input buffer, respecting the TURN parser's drain-before-next-read invariant. Respect `wants_read()`: Rustls reports false while plaintext remains available, and callers should drain that plaintext before accepting more ciphertext.
-4. On socket-writable readiness, call `write_tls` and preserve any unwritten ciphertext across partial writes and `WouldBlock`. Rustls retains unsent TLS records internally; keep driving writable readiness while `wants_write()` is true.
-5. Continue handshake progress until `is_handshaking()` is false and pending handshake output has been flushed (`wants_write() == false`). `is_handshaking() == false` alone does not prove the final handshake flight has left the client. Do not expose application data as ready before this condition.
-6. After handshake, move TURN bytes through Rustls `writer()` and decrypted bytes to the TURN parser. Preserve strict stream ordering in both directions.
-7. Handle close-notify, unexpected EOF, fatal TLS alerts and socket errors as terminal transport events. Never reinterpret truncated TLS as clean TURN shutdown.
+The implemented engine drives Rustls explicitly and never calls `complete_io()`:
+1. `TlsClientEngine::feed_ciphertext` accepts one ciphertext chunk up to 16 KiB, calls `read_tls` and `process_new_packets`, and reports consumed bytes, available plaintext and pending output.
+2. `read_plaintext` drains authenticated plaintext from Rustls `reader()` into caller-owned storage.
+3. `write_plaintext` accepts at most 16 KiB and refuses application data until the handshake is complete and prior TLS output has been taken.
+4. `drain_ciphertext` stages Rustls output into a bounded 256 KiB batch and copies a caller-sized prefix. It never partially writes a TLS record directly into a too-small socket buffer.
+5. `wants_read`, `wants_write` and `application_data_ready` expose readiness and handshake state. Handshake completion requires `is_handshaking() == false` and no pending TLS output.
+6. `TlsStreamSocket` wraps an already-connected `TurnStreamSocket`, preserves partial ciphertext writes in a fixed 16 KiB output buffer, decrypts reads, and implements the same stream trait consumed by `TurnTcpDriver`.
+7. `TurnTcpDriver<TlsStreamSocket<S>>` keeps TURN framing and parser state above TLS. The driver retains TURN bytes when the TLS handshake is not ready; the underlay socket sees only ciphertext.
+
+The wrapper does not create, bind, protect or connect sockets. The platform must still prepare the raw socket and drive read/write readiness. Unexpected EOF, fatal TLS alerts and socket errors retire the stream. A complete successful handshake and close-notify behavior remain integration-test work.
 
 The API must expose whether the TLS engine wants socket read or write readiness and whether decrypted TURN bytes are waiting. A single read may produce multiple TLS records or partial TURN messages; bounded draining must handle both without losing data.
 
 ## 5. Memory and backpressure
 
-All buffers and queues must have explicit limits. Define limits for:
-- ciphertext input chunk;
-- pending ciphertext output;
-- decrypted plaintext waiting for TURN;
-- plaintext queued from TURN pending TLS encryption;
-- maximum TLS record size accepted by the adapter;
-- total per-connection buffering.
+Current explicit limits are: 16 KiB ciphertext input chunks, 16 KiB plaintext writes, 64 KiB Rustls plaintext buffering limit, 256 KiB maximum staged TLS ciphertext batch, and fixed 16 KiB input/output arrays in `TlsStreamSocket`. The staged ciphertext vector grows only as needed and is hard-bounded; overflow retires the TLS connection rather than dropping or replaying a partial record batch.
 
-When any bound is reached, stop reading from the socket or stop accepting more TURN plaintext and report backpressure. Do not drop TLS control/handshake bytes. Avoid an unbounded `Vec` accumulation path. Reuse caller-owned buffers where Rustls APIs permit; measure unavoidable internal allocations before optimization.
+The current wrapper retains ciphertext across partial socket writes and `WouldBlock`. Aggregate per-connection memory, Rustls internal allocations, and memory under the 30–40 allocation profile still require measurement. Do not treat these constants as final performance tuning.
 
 The TLS layer must not create one OS thread per TURN allocation. It is driven by the same readiness/runtime model as the raw TCP driver. Keep per-allocation buffers bounded and account for their aggregate memory when selecting concurrency.
 
@@ -81,14 +77,13 @@ The TLS layer must not create one OS thread per TURN allocation. It is driven by
 
 The current `TurnTcpDriver` owns a raw `TurnStreamSocket`. TLS must not be bolted on by wrapping encrypted bytes in the existing raw TURN queue: the TURN engine must see decrypted TURN stream bytes, while the socket sees only TLS ciphertext.
 
-Preferred separation:
-- retain `TurnTcpEngine` as the Sans-I/O TURN state machine;
-- define a stream-security/I/O adapter that owns Rustls and the raw socket;
-- make the driver pump TURN plaintext into the TLS writer and TLS plaintext into the TURN engine;
-- preserve TURN frame ordering and parser backpressure;
-- expose handshake state and TLS errors distinctly from TURN lifecycle events.
+Implemented separation:
+- `TurnTcpEngine` remains the Sans-I/O TURN state machine;
+- `TlsStreamSocket<S>` owns Rustls plus the already-connected raw socket;
+- the existing `TurnTcpDriver` consumes `TlsStreamSocket<S>` through the `TurnStreamSocket` interface, so TURN protocol bytes are plaintext only above the TLS adapter;
+- partial ciphertext writes and TLS handshake backpressure are retained without changing TURN framing.
 
-Avoid forcing TLS types into `TurnTcpEngine`. Keep the plaintext TCP driver available for explicitly configured non-TLS test environments only; production policy must prefer TLS where the endpoint requires it.
+TLS types are not forced into `TurnTcpEngine`. The raw plaintext TCP path remains available only when explicitly selected by endpoint policy; it is not an automatic fallback after TLS failure.
 
 ## 7. Failure and network handover
 
@@ -124,18 +119,27 @@ Performance gates compare plaintext TCP and TLS on identical devices/networks: t
 ## 9. Current implementation status
 
 Implemented:
-- Sans-I/O TURN-over-TCP engine with UDP relay allocation;
-- bounded raw TCP stream queue and nonblocking driver;
-- partial-write preservation, bounded reads, peer endpoint validation and parser-drain guard;
-- TCP TURN integration test against a local TURN server.
+- pinned Rustls 0.23.46 dependency and generated lockfile;
+- nonblocking `TlsClientEngine` with caller-supplied verified `ClientConfig` and validated `ServerName`;
+- rejection of configurations with TLS 1.3 early data enabled;
+- explicit handshake/read/write progress without blocking socket I/O;
+- bounded ciphertext input, pending output and plaintext write sizes;
+- `TlsStreamSocket<S>` adapter that wraps an already-connected TURN TCP socket;
+- integration with the existing `TurnTcpDriver` through `TurnStreamSocket`;
+- tests for ClientHello generation, partial TLS output draining, handshake gating, oversized input, early-data rejection, partial socket writes, and TURN driver plaintext isolation;
+- CI formatting, Clippy and tests with all Cargo features enabled.
 
-Not implemented:
-- Rustls dependency or TLS adapter;
-- platform certificate verifier integration;
-- Android Kotlin/Gradle/JNI initialization;
-- TLS-enabled TURN integration tests;
-- production transport selection and live gateway interoperability.
+Not implemented or not yet validated:
+- complete successful client/server TLS handshake test with a local certificate authority;
+- valid, expired, untrusted and hostname-mismatched certificate integration tests;
+- `rustls-platform-verifier` dependency and platform trust-store integration;
+- Android Kotlin/Gradle/JNI initialization and Android instrumentation tests;
+- iOS and Windows trust-store integration;
+- TLS-enabled TURN server integration covering Allocate, Permission, ChannelBind and peer data;
+- network handover, session resumption policy and production transport selection;
+- device-level throughput, latency, memory, thermal and battery benchmarks.
 
+The current code is an implementation foundation, not a release-ready TLS transport. Do not enable it as a production fallback until the missing trust, handshake, server interoperability, handover and device tests pass.
 References:
 - [RFC 8656 — Traversal Using Relays around NAT (TURN)](https://www.rfc-editor.org/rfc/rfc8656)
 - [RFC 8446 — The Transport Layer Security (TLS) Protocol Version 1.3](https://www.rfc-editor.org/rfc/rfc8446)
