@@ -148,7 +148,10 @@ impl ChallengeSession {
     /// Reserves budget and enters Solving. Rejected challenges may be retried
     /// while the shared cycle budget still permits it.
     pub fn begin_attempt(&mut self, kind: ChallengeKind) -> Result<u8, ChallengeError> {
-        if !matches!(self.phase, ChallengePhase::Detected | ChallengePhase::Rejected) {
+        if !matches!(
+            self.phase,
+            ChallengePhase::Detected | ChallengePhase::Rejected
+        ) {
             return Err(ChallengeError::InvalidTransition {
                 from: self.phase,
                 to: ChallengePhase::Solving,
@@ -275,10 +278,7 @@ mod tests {
         session.begin_attempt(ChallengeKind::Slider).unwrap();
         session.submitted().unwrap();
         session.rejected().unwrap();
-        assert_eq!(
-            session.begin_attempt(ChallengeKind::Slider),
-            Ok(2)
-        );
+        assert_eq!(session.begin_attempt(ChallengeKind::Slider), Ok(2));
     }
 
     #[test]
