@@ -4,7 +4,7 @@
 //! data path receives borrowed credentials and never handles VK account tokens,
 //! cookies, call links, or provider-specific secrets.
 
-use crate::{IoBudget, MonotonicTime};
+use crate::{ChallengeKind, IoBudget, MonotonicTime};
 
 /// Transport requested between the TURN client and the TURN server.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,6 +68,7 @@ pub enum CredentialProviderError {
     ChallengeRequired,
     ChallengeRejected,
     ChallengeExpired,
+    ChallengeMismatch,
     InteractiveVerificationRequired,
     RateLimited,
     CallUnavailable,
@@ -98,6 +99,24 @@ pub struct CredentialPollOutcome {
     pub next_deadline: Option<MonotonicTime>,
 }
 
+/**
+ * Non-secret description of the currently active provider challenge.
+ *
+ * The challenge ID is an opaque, provider-local correlation value. It is not
+ * an authorization token and must not be reused for another challenge in the
+ * same provider instance. The interactive URL, when present, is short-lived
+ * and must only be opened in the constrained first-party WebView surface.
+ *
+ * This type intentionally does not implement Debug because challenge URLs can
+ * contain session-bound query parameters.
+ */
+pub struct CredentialChallenge<'a> {
+    pub id: u64,
+    pub kind: ChallengeKind,
+    pub interactive_url: Option<&'a str>,
+    pub expires_at: Option<MonotonicTime>,
+}
+
 /// Asynchronous, runtime-neutral source of short-lived TURN credentials.
 ///
 /// A concrete VK provider is configured separately with a user-authorized call
@@ -121,6 +140,24 @@ pub trait TurnCredentialProvider {
         now: MonotonicTime,
         budget: IoBudget,
     ) -> Result<CredentialPollOutcome, CredentialProviderError>;
+
+    /// Describes the active challenge without exposing its originating
+    /// cookies, access tokens, or provider session. The descriptor remains
+    /// available while user interaction is pending and is cleared only when
+    /// the challenge is accepted, rejected terminally, expired, or cancelled.
+    fn challenge(&self) -> Option<CredentialChallenge<'_>>;
+
+    /// Queues a challenge response for submission by the provider's existing
+    /// originating session. The provider must not create a new anonymous or
+    /// account session to submit it. This method only stages the response:
+    /// remote acceptance is established by a later poll result, never by this
+    /// call returning Ok. Implementations must reject stale/foreign IDs and
+    /// must not log, persist, or expose response bytes.
+    fn submit_challenge_response(
+        &mut self,
+        challenge_id: u64,
+        response: &[u8],
+    ) -> Result<(), CredentialProviderError>;
 
     /// Returns currently valid credentials, including previously issued
     /// credentials that remain usable while a refresh challenge is pending.
