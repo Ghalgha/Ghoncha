@@ -199,7 +199,7 @@ class VkChallengeWebViewActivity : Activity() {
             webView,
             BRIDGE_NAME,
             ALLOWED_ORIGIN_RULES,
-        ) { view, message, sourceOrigin, isMainFrame, _ ->
+        ) { view, message, sourceOrigin, _, _ ->
             if (
                 view !== webView ||
                 !isAllowedOrigin(sourceOrigin) ||
