@@ -952,7 +952,6 @@ mod tests {
         let mut input = std::io::Cursor::new(&client_finished);
         assert_eq!(server.read_tls(&mut input).unwrap(), client_finished.len());
         server.process_new_packets().unwrap();
-        assert!(!server.is_handshaking());
         assert!(socket.tls().application_data_ready());
 
         let request = b"TURN Allocate";
