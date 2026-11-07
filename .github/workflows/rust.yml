@@ -77,8 +77,21 @@ jobs:
         with:
           gradle-version: "9.5.0"
 
-      - name: Build debug APK
-        run: gradle --no-daemon -p android assembleDebug
+      - name: Build debug and release APKs
+        run: gradle --no-daemon -p android assembleDebug assembleRelease
         env:
           ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/28.2.13676358
           ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/28.2.13676358
+
+      - name: Verify native libraries are packaged for every ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          for apk in \
+            android/app/build/outputs/apk/debug/app-debug.apk \
+            android/app/build/outputs/apk/release/app-release-unsigned.apk; do
+            test -f "$apk"
+            for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+              unzip -Z1 "$apk" | grep -Fx "lib/$abi/libghoncha_platform_android.so"
+            done
+          done
