@@ -242,7 +242,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
                     }
                     entry.worker_id = preferred_worker_id;
                     entry.last_seen_ns = now_ns;
-                    self.entries[index] = Some(entry);
+                    self.entries[index] = Slot::Occupied(entry);
                     self.metrics.remaps = self.metrics.remaps.saturating_add(1);
                     return Ok(DispatchDecision {
                         worker_id: preferred_worker_id,
