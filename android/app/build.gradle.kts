@@ -79,6 +79,7 @@ dependencies {
     implementation("org.rustls:rustls-platform-verifier")
     implementation("androidx.webkit:webkit:1.18.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
 
 val rustWorkspaceDir = rootProject.projectDir.parentFile
