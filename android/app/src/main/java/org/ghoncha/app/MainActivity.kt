@@ -1,8 +1,10 @@
 package org.ghoncha.app
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import android.widget.Button
 import android.widget.LinearLayout
@@ -28,12 +30,7 @@ class MainActivity : Activity() {
         val prepareTun = Button(this).apply {
             text = getString(R.string.vpn_prepare_tun)
             setOnClickListener {
-                val consentIntent = VpnService.prepare(this@MainActivity)
-                if (consentIntent == null) {
-                    startTunService()
-                } else {
-                    startActivityForResult(consentIntent, REQUEST_VPN_PERMISSION)
-                }
+                requestNotificationPermissionIfNeeded()
             }
         }
 
@@ -62,6 +59,17 @@ class MainActivity : Activity() {
         )
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_NOTIFICATION_PERMISSION) {
+            requestVpnConsent()
+        }
+    }
+
     @Deprecated("Uses the platform VPN consent activity result contract.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -70,6 +78,30 @@ class MainActivity : Activity() {
             startTunService()
         } else {
             status.text = getString(R.string.vpn_permission_denied)
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                REQUEST_NOTIFICATION_PERMISSION,
+            )
+        } else {
+            requestVpnConsent()
+        }
+    }
+
+    private fun requestVpnConsent() {
+        val consentIntent = VpnService.prepare(this)
+        if (consentIntent == null) {
+            startTunService()
+        } else {
+            startActivityForResult(consentIntent, REQUEST_VPN_PERMISSION)
         }
     }
 
@@ -82,5 +114,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_VPN_PERMISSION = 71
+        private const val REQUEST_NOTIFICATION_PERMISSION = 72
     }
 }
