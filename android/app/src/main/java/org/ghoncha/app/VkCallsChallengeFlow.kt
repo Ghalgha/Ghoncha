@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import java.io.IOException
+import java.net.URI
 
 /**
  * Complete Android handoff for one VK Calls CAPTCHA transaction.
@@ -15,18 +16,25 @@ import java.io.IOException
  */
 internal class VkCallsChallengeFlow(
     challengeId: Long,
-    originalUrl: String,
+    private val originalUrlForValidation: String,
     originalBody: ByteArray,
     private val challenge: VkCallsResult.Challenge,
     expiresAtElapsedRealtimeMs: Long?,
 ) {
     private val transaction = VkCallsChallengeTransaction(
         challengeId = challengeId,
-        originalUrl = originalUrl,
+        originalUrl = originalUrlForValidation,
         originalBody = originalBody,
         challenge = challenge,
         expiresAtElapsedRealtimeMs = expiresAtElapsedRealtimeMs,
     )
+
+    init {
+        val path = URI(originalUrlForValidation).path.orEmpty().trimEnd('/')
+        require(path.endsWith("/calls.getAnonymousToken")) {
+            "VK challenge flow only retries calls.getAnonymousToken"
+        }
+    }
 
     fun createIntent(context: Context): Intent =
         VkChallengeWebViewActivity.createIntent(
@@ -68,13 +76,12 @@ internal class VkCallsChallengeFlow(
         }
 
         if (response.statusCode == 429) return VkCallsResult.RateLimited
-        val parsed = VkCallsResponseParser.parse(response.body)
-        return if (response.statusCode in 200..299 || parsed is VkCallsResult.Challenge ||
-            parsed is VkCallsResult.RateLimited
-        ) {
-            parsed
-        } else {
-            VkCallsResult.ProviderFailure
+        val parsed = VkCallsResponseParser.parseAnonymousToken(response.body)
+        return when {
+            response.statusCode in 200..299 -> parsed
+            parsed is VkCallsResult.RateLimited -> VkCallsResult.RateLimited
+            parsed is VkCallsResult.Challenge && response.statusCode in 400..499 -> parsed
+            else -> VkCallsResult.ProviderFailure
         }
     }
 }
