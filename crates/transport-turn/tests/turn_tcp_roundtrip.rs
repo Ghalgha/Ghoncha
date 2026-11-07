@@ -15,6 +15,7 @@ fn instant(now: MonotonicTime) -> Instant {
 }
 
 fn advance_client(engine: &mut TurnTcpEngine, now: MonotonicTime) -> MonotonicTime {
+    while engine.poll_event().is_some() {}
     match engine.poll(now).unwrap() {
         TurnPollRet::WaitUntil(next) => MonotonicTime(next.as_nanos() as u64),
         _ => panic!("unexpected TURN TCP client poll result"),
