@@ -144,7 +144,10 @@ class VkChallengeWebViewActivity : Activity() {
         return try {
             val uri = URI(value)
             val host = uri.host?.lowercase() ?: return false
-            uri.scheme == "https" && host in ALLOWED_HOSTS
+            uri.scheme == "https" &&
+                uri.userInfo == null &&
+                (uri.port == -1 || uri.port == 443) &&
+                host in ALLOWED_HOSTS
         } catch (_: Exception) {
             false
         }
@@ -161,9 +164,11 @@ class VkChallengeWebViewActivity : Activity() {
             "vk.com",
             "www.vk.com",
             "id.vk.com",
+            "login.vk.com",
             "vk.ru",
             "www.vk.ru",
             "id.vk.ru",
+            "login.vk.ru",
         )
     }
 }
