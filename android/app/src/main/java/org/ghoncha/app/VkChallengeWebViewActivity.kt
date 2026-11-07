@@ -16,6 +16,7 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONObject
@@ -33,10 +34,14 @@ import java.net.URI
  * No fingerprint spoofing, synthetic pointer events, or automated gestures
  * are performed here.
  */
+data class VkChallengeResult(val successToken: String?)
+
 class VkChallengeWebViewActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var status: TextView
     private var challengeToken: String? = null
+    private var messageBridgeInstalled = false
+    private var observerScript: ScriptHandler? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -98,7 +103,22 @@ class VkChallengeWebViewActivity : Activity() {
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
-            ): Boolean = !isAllowedUrl(request.url.toString())
+            ): Boolean {
+                // Keep third-party challenge assets/frames working. Only the
+                // top-level browsing context is constrained to VK origins.
+                return request.isForMainFrame && !isAllowedUrl(request.url.toString())
+            }
+
+            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                // Also validate server redirects, including redirects initiated
+                // by POST requests for which shouldOverrideUrlLoading is not a
+                // reliable enforcement point.
+                if (!isAllowedUrl(url)) {
+                    view.stopLoading()
+                    setResult(RESULT_CANCELED)
+                    finish()
+                }
+            }
 
             override fun onRenderProcessGone(
                 view: WebView,
@@ -207,7 +227,8 @@ class VkChallengeWebViewActivity : Activity() {
             }
         }
 
-        WebViewCompat.addDocumentStartJavaScript(
+        messageBridgeInstalled = true
+        observerScript = WebViewCompat.addDocumentStartJavaScript(
             webView,
             CHALLENGE_OBSERVER_SCRIPT,
             ALLOWED_ORIGIN_RULES,
@@ -216,6 +237,12 @@ class VkChallengeWebViewActivity : Activity() {
 
     override fun onDestroy() {
         if (::webView.isInitialized) {
+            observerScript?.remove()
+            observerScript = null
+            if (messageBridgeInstalled) {
+                WebViewCompat.removeWebMessageListener(webView, BRIDGE_NAME)
+                messageBridgeInstalled = false
+            }
             webView.stopLoading()
             webView.webChromeClient = null
             webView.webViewClient = WebViewClient()
@@ -253,6 +280,24 @@ class VkChallengeWebViewActivity : Activity() {
         const val EXTRA_CHALLENGE_URL = "org.ghoncha.app.VK_CHALLENGE_URL"
         const val EXTRA_CHALLENGE_TOKEN = "org.ghoncha.app.VK_CHALLENGE_TOKEN"
         const val EXTRA_USER_CONFIRMED = "org.ghoncha.app.VK_USER_CONFIRMED"
+
+        /**
+         * Converts the activity result into a typed handoff. A non-null result
+         * means only that the user returned from the WebView; successToken may
+         * still be null and must never be treated as server acceptance.
+         */
+        fun parseResult(resultCode: Int, data: Intent?): VkChallengeResult? {
+            if (
+                resultCode != Activity.RESULT_OK ||
+                data?.getBooleanExtra(EXTRA_USER_CONFIRMED, false) != true
+            ) {
+                return null
+            }
+            return VkChallengeResult(
+                successToken = data.getStringExtra(EXTRA_CHALLENGE_TOKEN)
+                    ?.takeIf { it.isNotBlank() && it.length <= MAX_TOKEN_LENGTH },
+            )
+        }
 
         private const val BRIDGE_NAME = "GhonchaCaptcha"
         private const val BRIDGE_MESSAGE_TYPE = "vk_captcha_success_token"
@@ -311,9 +356,9 @@ class VkChallengeWebViewActivity : Activity() {
               const originalFetch = window.fetch;
               if (typeof originalFetch === "function") {
                 window.fetch = function(input, init) {
-                  const url = typeof input === "string"
-                    ? input
-                    : input && input.url;
+                  const url = input && typeof input.url === "string"
+                    ? input.url
+                    : String(input);
                   return originalFetch.apply(this, arguments).then(response => {
                     try {
                       response.clone().text().then(body => report(url, body));
@@ -332,7 +377,12 @@ class VkChallengeWebViewActivity : Activity() {
               XMLHttpRequest.prototype.send = function() {
                 this.addEventListener("load", function() {
                   try {
-                    report(this.__ghonchaCaptchaUrl, this.responseText);
+                    const body = this.responseType === "json"
+                      ? JSON.stringify(this.response)
+                      : this.responseType === "" || this.responseType === "text"
+                        ? this.responseText
+                        : null;
+                    report(this.__ghonchaCaptchaUrl, body);
                   } catch (_) {}
                 });
                 return originalSend.apply(this, arguments);
