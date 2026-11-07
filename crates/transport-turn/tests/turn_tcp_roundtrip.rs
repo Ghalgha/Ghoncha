@@ -59,7 +59,7 @@ fn exchange_client_request(
             } => {
                 assert_eq!(transport, TransportType::Tcp);
                 assert_eq!(allocation_transport, TransportType::Udp);
-                assert!(family.is_ipv4());
+                assert_eq!(family, turn_server_proto::types::AddressFamily::IPV4);
                 server.allocated_socket(
                     transport,
                     listen_addr,
