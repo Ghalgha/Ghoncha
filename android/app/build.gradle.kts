@@ -72,9 +72,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    sourceSets.getByName("main").jniLibs.srcDir(
-        layout.buildDirectory.dir("generated/rustJniLibs"),
-    )
+    sourceSets.getByName("main").jniLibs.srcDir("build/generated/rustJniLibs")
 }
 
 dependencies {
