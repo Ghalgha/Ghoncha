@@ -1,6 +1,11 @@
 <resources>
     <string name="app_name">GHONCHA</string>
     <string name="vpn_notification_channel">VPN status</string>
-    <string name="vpn_tun_not_forwarding">Local TUN is allocated; packet forwarding is not active.</string>
+    <string name="vpn_tun_not_forwarding">Local TUN allocated; no routes or packet forwarding are active.</string>
+    <string name="vpn_tun_test_description">TUN lifecycle test only. This does not route or forward device traffic.</string>
+    <string name="vpn_prepare_tun">Prepare local TUN (test only)</string>
+    <string name="vpn_tun_start_requested">TUN preparation requested. Check the persistent notification for the result.</string>
+    <string name="vpn_tun_stopped">Local TUN stopped.</string>
+    <string name="vpn_permission_denied">VPN permission was not granted.</string>
     <string name="vpn_stop">Stop</string>
 </resources>
