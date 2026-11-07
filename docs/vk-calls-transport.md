@@ -66,7 +66,7 @@ Use these sources in this order when maintaining the credential provider:
 - **Official VK API reference:** https://dev.vk.com/ru/reference — method contracts, authorization, access scopes, API versioning, errors, and rate limits.
 - **Calls management methods:** https://dev.vk.com/method/calls.start and https://dev.vk.com/method/calls.forceFinish — verify current availability, parameters, permissions, and response schemas directly against the live official reference before implementation.
 - **VK Android SDK:** https://github.com/VKCOM/vk-android-sdk — supported Android authorization and API client patterns; prefer the supported SDK for documented account API operations where practical.
-- **VK Calls JavaScript SDK:** https://st.mycdn.me/static/callssdk/latest/doc/index.html — call/media integration SDK. It is not the TURN credential provider and does not define the TURN protocol used by the reference VPN projects.
+- **VK Calls JavaScript SDK:** https://st.mycdn.me/static/callssdk/latest/doc/index.html — call/media integration SDK. It is not the TURN credential provider and does not define the TURN protocol used by Ghoncha.
 
 Maintain a small provider compatibility record containing the date checked, API version, method, authorization type, required scopes, documented/undocumented status, response schema version, and last successful integration test. Do not infer that a Calls-specific backend endpoint is public just because it appears under a VK-owned domain or is called by a first-party client.
 
