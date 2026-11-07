@@ -29,7 +29,7 @@ internal class VkCallsHttpsSession(
      * Invoke from a worker thread; this method performs blocking network I/O.
      */
     @Synchronized
-    fun postForm(url: String, body: ByteArray): VkApiHttpResponse {
+    fun postForm(url: String, body: ByteArray): VkCallsHttpResponse {
         require(VkCallsUrlPolicy.allows(url)) { "Untrusted VK API URL" }
         require(body.isNotEmpty() && body.size <= MAX_REQUEST_BYTES) {
             "VK API request body is outside the allowed size"
@@ -63,7 +63,7 @@ internal class VkCallsHttpsSession(
             val stream = if (status >= 400) connection.errorStream else connection.inputStream
             val response = stream?.use { readBounded(it, MAX_RESPONSE_BYTES) } ?: ByteArray(0)
 
-            return VkApiHttpResponse(status, response)
+            return VkCallsHttpResponse(status, response)
         } finally {
             connection.disconnect()
         }
@@ -110,19 +110,19 @@ internal class VkCallsHttpsSession(
  * Response deliberately has no data-class-generated toString(): bodies may
  * contain short-lived credentials or account/session material.
  */
-internal class VkApiHttpResponse(
+internal class VkCallsHttpResponse(
     val statusCode: Int,
     val body: ByteArray,
 )
 
-/** Exact-host allowlist for VK Calls HTTPS service endpoints observed in the reference audit. This is not an assertion that their private methods are a stable public API. */
+/**\n * Exact-host allowlist for VK Calls HTTPS endpoints observed in the reference audit.\n * This does not assert that private methods on these hosts are stable public APIs.\n */
 internal object VkCallsUrlPolicy {
     private val ALLOWED_HOSTS = setOf(\n        "api.vk.com",\n        "api.vk.ru",\n        "login.vk.ru",\n        "calls.okcdn.ru",\n    )
 
     fun allows(value: String): Boolean = try {
         val uri = URI(value)
         uri.scheme.equals("https", ignoreCase = true) &&
-            uri.host?.lowercase() in ALLOWED_HOSTS &&
+            uri.host?.lowercase()?.let { it in ALLOWED_HOSTS } == true &&
             uri.userInfo == null &&
             (uri.port == -1 || uri.port == 443) &&
             uri.rawFragment == null
