@@ -17,4 +17,12 @@ object NativeBootstrap {
     /** Closes a native socket handle that has not been transferred to Rust I/O. */
     @JvmStatic
     external fun closeUdpSocket(handle: Long): Boolean
+
+    /** Consumes a pending handle and transfers its UDP socket into Rust ownership. */
+    @JvmStatic
+    external fun consumeUdpSocket(handle: Long): Boolean
+
+    /** Closes a Rust-owned socket that has not yet entered a TURN driver. */
+    @JvmStatic
+    external fun closeAdoptedUdpSocket(handle: Long): Boolean
 }
