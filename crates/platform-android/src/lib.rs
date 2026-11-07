@@ -9,7 +9,7 @@ mod android {
     use std::net::{SocketAddr, UdpSocket};
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::raw::c_int;
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};
 
     use ghoncha_transport_turn::{DatagramReceive, DatagramSocketError, TurnDatagramSocket};
@@ -20,7 +20,9 @@ mod android {
 
     static ANDROID_VERIFIER_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static NEXT_SOCKET_HANDLE: AtomicU32 = AtomicU32::new(1);
+    static NEXT_TUN_HANDLE: AtomicU64 = AtomicU64::new(1);
     static UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, OwnedFd>>> = OnceLock::new();
+    static TUN_INTERFACES: OnceLock<Mutex<HashMap<i64, OwnedFd>>> = OnceLock::new();
     static ADOPTED_UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, AndroidUdpSocket>>> = OnceLock::new();
 
     const F_GETFD: c_int = 1;
@@ -71,6 +73,78 @@ mod android {
 
     fn socket_table() -> &'static Mutex<HashMap<i64, OwnedFd>> {
         UDP_SOCKETS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    fn tun_interface_table() -> &'static Mutex<HashMap<i64, OwnedFd>> {
+        TUN_INTERFACES.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Takes ownership of a detached Android TUN descriptor.
+    ///
+    /// The caller must pass an fd returned by VpnService.Builder.establish()
+    /// through ParcelFileDescriptor.detachFd(). Every failure path drops the
+    /// OwnedFd and therefore closes the detached descriptor.
+    fn adopt_tun_fd(detached_fd: c_int) -> Option<i64> {
+        if detached_fd < 0 {
+            return None;
+        }
+
+        // SAFETY: the JNI contract transfers ownership of this detached fd.
+        let owned_fd = unsafe { OwnedFd::from_raw_fd(detached_fd) };
+
+        // Keep the descriptor private to this process and ready for poll/read.
+        // SAFETY: fcntl operates on the owned, live descriptor.
+        let descriptor_flags = unsafe { fcntl(detached_fd, F_GETFD) };
+        if descriptor_flags < 0
+            // SAFETY: descriptor_flags was read from this descriptor above.
+            || unsafe { fcntl(detached_fd, F_SETFD, descriptor_flags | FD_CLOEXEC) } < 0
+        {
+            return None;
+        }
+
+        // VpnService TUN descriptors are non-blocking by default. Enforce the
+        // invariant here because the native reactor must never block a worker.
+        // SAFETY: fcntl operates on the owned, live descriptor.
+        let status_flags = unsafe { fcntl(detached_fd, F_GETFL) };
+        if status_flags < 0
+            // SAFETY: status_flags was read from this descriptor above.
+            || unsafe { fcntl(detached_fd, F_SETFL, status_flags | O_NONBLOCK) } < 0
+        {
+            return None;
+        }
+
+        let raw_handle = NEXT_TUN_HANDLE
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                (next <= i64::MAX as u64).then(|| next + 1)
+            })
+            .ok()?;
+        let handle = i64::try_from(raw_handle).ok()?;
+        let mut interfaces = tun_interface_table().lock().ok()?;
+        if interfaces.contains_key(&handle) {
+            return None;
+        }
+        interfaces.insert(handle, owned_fd);
+        Some(handle)
+    }
+
+    /// Closes a TUN descriptor that has not been claimed by the native runtime.
+    fn close_tun_interface(handle: i64) -> bool {
+        if handle <= 0 {
+            return false;
+        }
+        tun_interface_table()
+            .lock()
+            .ok()
+            .and_then(|mut interfaces| interfaces.remove(&handle))
+            .is_some()
+    }
+
+    /// Transfers a TUN descriptor from the JNI registry to a native packet runtime.
+    pub fn take_tun_interface(handle: i64) -> Option<OwnedFd> {
+        if handle <= 0 {
+            return None;
+        }
+        tun_interface_table().lock().ok()?.remove(&handle)
     }
 
     fn adopted_socket_table() -> &'static Mutex<HashMap<i64, AndroidUdpSocket>> {
@@ -552,6 +626,31 @@ mod android {
             .unwrap_or(0)
     }
 
+    /// Takes ownership of a detached VpnService TUN descriptor.
+    ///
+    /// The caller must not close or use the fd after this call, even when zero
+    /// is returned: the native boundary consumes and closes it on failure.
+    #[jni_mangle("org.ghoncha.app.NativeBootstrap")]
+    #[allow(non_snake_case)]
+    pub fn adoptTunInterface(
+        _unowned_env: EnvUnowned<'_>,
+        _class: JClass<'_>,
+        detached_fd: i32,
+    ) -> i64 {
+        adopt_tun_fd(detached_fd).unwrap_or(0)
+    }
+
+    /// Closes a TUN descriptor that has not been transferred to the packet runtime.
+    #[jni_mangle("org.ghoncha.app.NativeBootstrap")]
+    #[allow(non_snake_case)]
+    pub fn closeTunInterface(
+        _unowned_env: EnvUnowned<'_>,
+        _class: JClass<'_>,
+        handle: i64,
+    ) -> bool {
+        close_tun_interface(handle)
+    }
+
     /// Closes a native UDP handle that has not been transferred to a reactor.
     #[jni_mangle("org.ghoncha.app.NativeBootstrap")]
     #[allow(non_snake_case)]
@@ -601,5 +700,5 @@ mod android {
 pub use android::{
     AndroidPollEvent, AndroidPollerError, AndroidSocketAdoptionError, AndroidUdpPoller,
     AndroidUdpSocket, platform_tls_client_config, take_adopted_udp_socket, take_android_udp_socket,
-    take_udp_socket,
+    take_tun_interface, take_udp_socket,
 };
