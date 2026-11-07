@@ -1,0 +1,26 @@
+name: Temporary Cargo lockfile bootstrap
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Resolve dependencies and emit lockfile
+        run: |
+          cargo +1.99.1 generate-lockfile
+          echo "LOCKFILE_BASE64_BEGIN"
+          base64 -w0 Cargo.lock
+          echo
+          echo "LOCKFILE_BASE64_END"
