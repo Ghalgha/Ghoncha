@@ -31,6 +31,13 @@ mod android {
     const SOL_SOCKET: c_int = 1;
     const SO_TYPE: c_int = 3;
     const SOCK_DGRAM: c_int = 2;
+    const AF_INET: u16 = 2;
+    const AF_INET6: u16 = 10;
+
+    #[repr(C, align(8))]
+    struct SockAddrStorage {
+        bytes: [u8; 128],
+    }
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -50,6 +57,8 @@ mod android {
         fn dup(oldfd: c_int) -> c_int;
         fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
         fn poll(fds: *mut PollFd, nfds: usize, timeout_ms: c_int) -> c_int;
+        fn getsockname(fd: c_int, address: *mut c_void, address_len: *mut u32) -> c_int;
+        fn getpeername(fd: c_int, address: *mut c_void, address_len: *mut u32) -> c_int;
         fn getsockopt(
             fd: c_int,
             level: c_int,
@@ -97,6 +106,43 @@ mod android {
             )
         };
         if socket_type_result != 0 || socket_type != SOCK_DGRAM {
+            return None;
+        }
+
+        // Require a bound IPv4/IPv6 UDP socket with a nonzero local port.
+        let mut local_address = SockAddrStorage { bytes: [0; 128] };
+        let mut local_address_len = local_address.bytes.len() as u32;
+        // SAFETY: local_address is aligned storage with sufficient capacity.
+        if unsafe {
+            getsockname(
+                fd,
+                local_address.bytes.as_mut_ptr().cast(),
+                &mut local_address_len,
+            )
+        } != 0
+            || local_address_len < 4
+        {
+            return None;
+        }
+        let address_family =
+            u16::from_ne_bytes([local_address.bytes[0], local_address.bytes[1]]);
+        let local_port = u16::from_be_bytes([local_address.bytes[2], local_address.bytes[3]]);
+        if !matches!(address_family, AF_INET | AF_INET6) || local_port == 0 {
+            return None;
+        }
+
+        // TURN's send_to/recv_from adapter requires an unconnected socket.
+        let mut peer_address = SockAddrStorage { bytes: [0; 128] };
+        let mut peer_address_len = peer_address.bytes.len() as u32;
+        // SAFETY: peer_address is aligned storage with sufficient capacity.
+        if unsafe {
+            getpeername(
+                fd,
+                peer_address.bytes.as_mut_ptr().cast(),
+                &mut peer_address_len,
+            )
+        } == 0
+        {
             return None;
         }
 
