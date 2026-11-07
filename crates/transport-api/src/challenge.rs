@@ -109,7 +109,7 @@ impl ChallengeAttemptBudget {
     }
 }
 
-/// State and retry accounting for one provider challenge cycle.
+/// State and retry accounting for one provider credential cycle.
 ///
 /// A solver result must transition through Submitted and then Accepted only
 /// after the provider confirms acceptance. A locally generated token or answer
@@ -136,6 +136,12 @@ impl ChallengeSession {
     }
 
     pub fn detect(&mut self) -> Result<(), ChallengeError> {
+        self.transition(ChallengePhase::Detected)
+    }
+
+    /// Starts a subsequent challenge in the same credential cycle after VK
+    /// accepted the previous one. The shared attempt budget is not reset.
+    pub fn next_challenge(&mut self) -> Result<(), ChallengeError> {
         self.transition(ChallengePhase::Detected)
     }
 
@@ -184,6 +190,7 @@ impl ChallengeSession {
     fn transition(&mut self, next: ChallengePhase) -> Result<(), ChallengeError> {
         let allowed = match (self.phase, next) {
             (ChallengePhase::Idle, ChallengePhase::Detected)
+            | (ChallengePhase::Accepted, ChallengePhase::Detected)
             | (ChallengePhase::Detected, ChallengePhase::AwaitingUser)
             | (ChallengePhase::Solving, ChallengePhase::AwaitingUser)
             | (ChallengePhase::Solving, ChallengePhase::Submitted)
@@ -285,6 +292,19 @@ mod tests {
                 to: ChallengePhase::Accepted,
             })
         );
+    }
+
+    #[test]
+    fn accepted_challenge_can_be_followed_by_another_without_resetting_budget() {
+        let mut session = ChallengeSession::new(budget());
+        session.detect().unwrap();
+        assert_eq!(session.begin_attempt(ChallengeKind::Checkbox), Ok(1));
+        session.submitted().unwrap();
+        session.accepted().unwrap();
+
+        session.next_challenge().unwrap();
+        assert_eq!(session.begin_attempt(ChallengeKind::Slider), Ok(2));
+        assert_eq!(session.attempts().total_used(), 2);
     }
 
     #[test]
