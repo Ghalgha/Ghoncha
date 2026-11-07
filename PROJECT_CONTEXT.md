@@ -345,41 +345,49 @@ UI не должен содержать протокольную логику, r
 ### 14.2. Текущая рабочая ветка PR №4
 
 Ветка: `work/android-protected-udp-preparation`  
-Кодовый HEAD, прошедший аудит: `0cd727763510f997af3002488195162524d3bd77`  
-Текущий HEAD ветки после CI-настройки stacked PR: `7cd5d62b83e6942b603628b1d8d1a23e60ef41a9`  
+HEAD: `ce603d22c1ecc40cb1f3aa8060a096c74696acf5`  
 PR: https://github.com/Ghalgha/Ghoncha/pull/4  
-Состояние: открыт, draft; не считать влитым в `main`.
+Состояние: открыт draft; не слит.
 
-- **[РЕАЛИЗОВАНО В PR]** Testable Kotlin boundary для подготовки unconnected UDP socket.
-- **[РЕАЛИЗОВАНО В PR]** Проверка порядка `VpnService.protect()` до `Network.bindSocket()`; fail-closed с закрытием сокета при ошибке.
-- **[РЕАЛИЗОВАНО В PR]** Underlay UDP socket factory: host/port validation, network-scoped DNS, IPv4/IPv6 family selection, ephemeral local bind, nonblocking mode и network-generation checks.
-- **[РЕАЛИЗОВАНО В PR]** Android wrapper для реальных Network/VpnService callbacks.
-- **[РЕАЛИЗОВАНО В PR]** JVM regression tests для socket preparation/factory.
-- **[РЕАЛИЗОВАНО В PR]** JNI FD duplication/adoption boundary с проверкой UDP socket, ownership handles и native close paths.
-- **[РЕАЛИЗОВАНО В PR]** Native adopted UDP socket registry и возможность забрать socket в Rust ownership.
-- **[РЕАЛИЗОВАНО В PR]** Android UDP socket adapter, реализующий TURN datagram socket contract.
-- **[РЕАЛИЗОВАНО В PR]** Fixed-capacity `poll(2)` readiness poller с registration tokens и unregister-before-close semantics.
-- **[РЕАЛИЗОВАНО В PR]** TURN UDP control deadline exposure и расчёт bounded wait duration для reactor.
-- **[РЕАЛИЗОВАНО В PR]** Документированный Android UDP socket contract.
+- **[РЕАЛИЗОВАНО В PR №4]** Testable Kotlin boundary для подготовки unconnected UDP socket.
+- **[РЕАЛИЗОВАНО В PR №4]** Проверка порядка `VpnService.protect()` до `Network.bindSocket()`; fail-closed с закрытием сокета при ошибке.
+- **[РЕАЛИЗОВАНО В PR №4]** Underlay UDP socket factory: host/port validation, network-scoped DNS, IPv4/IPv6 family selection, ephemeral local bind, nonblocking mode и network-generation checks.
+- **[РЕАЛИЗОВАНО В PR №4]** Android wrapper для реальных Network/VpnService callbacks.
+- **[РЕАЛИЗОВАНО В PR №4]** JVM regression tests для socket preparation/factory.
+- **[РЕАЛИЗОВАНО В PR №4]** JNI FD duplication/adoption boundary с проверкой UDP socket, ownership handles и native close paths.
+- **[РЕАЛИЗОВАНО В PR №4]** Native adopted UDP socket registry и возможность забрать socket в Rust ownership.
+- **[РЕАЛИЗОВАНО В PR №4]** Android UDP socket adapter, реализующий TURN datagram socket contract.
+- **[РЕАЛИЗОВАНО В PR №4]** Fixed-capacity `poll(2)` readiness poller с registration tokens и unregister-before-close semantics.
+- **[РЕАЛИЗОВАНО В PR №4]** TURN UDP control deadline exposure и расчёт bounded wait duration для reactor.
 - **[ЧАСТИЧНО]** Native socket lifecycle подготовлен, но не подключён к persistent multi-allocation TURN runtime.
 - **[НЕ РЕАЛИЗОВАНО]** Android `VpnService`, TUN lifecycle, TURN driver orchestration, единый reactor TUN/TURN/TLS и end-to-end tunnel.
 
-CI для проверенного HEAD:
-- **[РЕАЛИЗОВАНО / CI PASS]** Format, lint и Rust tests — success.
-- **[РЕАЛИЗОВАНО / CI PASS]** Android debug build — success.
-- CI не заменяет device/instrumentation tests и live network interoperability.
+CI для HEAD `ce603d22...`: Rust format/Clippy/workspace tests прошли; Android JVM/build pipeline ещё выполняется. Device/instrumentation tests и live network interoperability не подтверждены.
 
-### 14.3. Последующая ветка PR №5 — heap-backed TURN queues
+### 14.3. Последующая ветка PR №6 — heap-backed TURN queues
 
-Ветка: `work/heap-backed-turn-queues`  
-Основана на PR №4 (`work/android-protected-udp-preparation`).  
-PR: https://github.com/Ghalgha/Ghoncha/pull/5  
-Состояние: открыт draft, не слит; изменения не входят в `main`.
+Ветка: `work/heap-backed-turn-queues-v2`  
+Основана непосредственно на текущем HEAD PR №4.  
+PR: https://github.com/Ghalgha/Ghoncha/pull/6  
+Состояние: открыт draft; CI выполняется; не слит.
 
-- **[РЕАЛИЗОВАНО В PR №5]** Heap-backed bounded TURN send queues с сохранением лимитов.
-- **[РЕАЛИЗОВАНО В PR №5]** Fallible queue allocation и `TurnError::AllocationFailed` в `TurnUdpDriver::new`.
-- **[CI PASS]** Rust format, Clippy и workspace tests на PR-head `baf36b77be7a2b62a3a04e15b3557704f96283a3`.
-- **[В ПРОВЕРКЕ]** Android debug build на том же PR-head.
+- **[РЕАЛИЗОВАНО В PR №6]** Heap-backed bounded TURN send queues с сохранением compile-time record/byte limits.
+- **[РЕАЛИЗОВАНО В PR №6]** Fallible queue allocation и `TurnError::AllocationFailed` в `TurnUdpDriver::new`.
+- **[ТЕСТЫ PASS НА ЭКВИВАЛЕНТНОМ ПРЕДЫДУЩЕМ HEAD]** Rust format, Clippy и workspace tests.
+- PR №5 закрыт без слияния и заменён PR №6, чтобы исключить лишний diff с удалением `PROJECT_CONTEXT.md`.
+
+### 14.4. Последующая ветка PR №7 — Android underlay network monitor
+
+Ветка: `work/android-underlay-network-monitor`  
+Основана на PR №4.  
+PR: https://github.com/Ghalgha/Ghoncha/pull/7  
+Состояние: открыт draft; CI ожидается/выполняется; не слит.
+
+- **[РЕАЛИЗОВАНО В PR №7]** Монитор кандидатов с `NET_CAPABILITY_INTERNET` и `NET_CAPABILITY_NOT_VPN`; автоматический выбор preferred network намеренно не выполняется.
+- **[РЕАЛИЗОВАНО В PR №7]** Snapshot capabilities, validation, metering и transport flags.
+- **[РЕАЛИЗОВАНО В PR №7]** Monotonic per-network generation invalidation при изменении capabilities/link properties и потере сети.
+- **[РЕАЛИЗОВАНО В PR №7]** Unit tests для generation registry.
+- Монитор пока не подключён к VpnService lifecycle и socket factory; device-level handover не проверен.
 
 ### 14.4. Другие открытые изменения
 
