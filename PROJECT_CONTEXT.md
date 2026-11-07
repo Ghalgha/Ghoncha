@@ -638,7 +638,7 @@ Ghoncha в целом не считается полноценным VPN до п
 - PR №4, PR №8 и PR №9 слиты в main; CI для PR №8/9 прошёл полностью.
 - Отображаемое имя Android-приложения установлено как `Ghoncha`; manifest использует `@string/app_name`. Эти изменения находятся в main на HEAD `75875988a2888d33932279429c7dbb6fb6e35c68`. CI для исправления имени приложения прошёл полностью в run `42394570576`.
 - PR №10 Ready for review, не слит. Его исходный CI run `42393331923` прошёл полностью до изменения app label; label correction добавлен в ветку PR10 на HEAD `83e7062658f7964891ea8b2956f44556d7c45362`, но для этого HEAD пока нет подтверждённого CI run.
-- PR №11 Ready for review; добавляет платформенно-независимый multi-allocation TURN runtime core. На HEAD `bc0e4f88f378d10540cca197af277661a94dadaf` полный CI run `42394689801` прошёл: Rust format, Clippy, workspace tests, Android JVM tests, debug/release APK и native packaging четырёх ABI. Дополнительно PR11 включает CI branch filter для следующего stacked PR; новый CI run `42395344907` проверяет обновлённый HEAD `93a2ba15188631a2f16f8f6b550eb592ceb0b56b`.
+- PR №11 был Ready for review и добавлял платформенно-независимый multi-allocation TURN runtime core. Полный CI run `42395344907` прошёл на HEAD `93a2ba15188631a2f16f8f6b550eb592ceb0b56b` (Rust format, Clippy, workspace tests, Android JVM tests, debug/release APK и native packaging четырёх ABI). 2026-11-07 PR №11 слит squash по прямому разрешению пользователя; merge commit `53cdf81adea6e04e26f0af6dfa17bc5701c6f713`.
 - В PR №11 исправлено обновление protocol deadline после socket readiness: после обработки входных TURN-событий runtime повторно опрашивает driver и сохраняет актуальный deadline.
 - PR №12 draft, stacked на PR №11: `AndroidTurnUdpRuntime` соединяет adopted UDP socket handles, `AndroidUdpPoller` и `TurnUdpRuntime`; обрабатывает readiness, TURN timers, writable interest, очередь peer payload и unregister-before-close. Поток намеренно не создаётся: lifecycle owner должен сериализовать вызовы и остановиться до drop runtime. На HEAD `7535300503c58dbd8cc761ecc5b9a4e6b8e69ad7` полный CI run `42395654747` завершился PASS: Rust format, Clippy, workspace tests, Android JVM tests, debug/release APK и native packaging четырёх ABI. PR остаётся draft и не слит.
 - Успешный CI не доказывает работу на физическом устройстве, совместимость с живым VK TURN relay, корректность маршрута в ограниченной сети или наличие end-to-end VPN.
@@ -681,3 +681,11 @@ Ghoncha в целом не считается полноценным VPN до п
 4. В диагностике разделять отказ DNS/IP reachability, TURN allocation, ICE/consent, DTLS handshake, SRTP authentication и внутреннего VPN-туннеля.
 5. Проверять false-positive/false-negative только на собственных контролируемых packet captures и тестовых сетях. Не заявлять гарантированную устойчивость к DPI или работу в сетях белых списков.
 6. Не переносить синтаксис этих примеров в production, не строить на нём архитектурные решения и не использовать как основание для заявления о том, что конкретный внешний проект блокируется указанным способом.
+
+
+## 22. Уточнение состояния после слияния PR №11 (2026-11-07)
+
+- PR №11 слит squash по прямому разрешению пользователя: merge commit `53cdf81adea6e04e26f0af6dfa17bc5701c6f713`; CI PASS run `42395344907` на PR HEAD `93a2ba15188631a2f16f8f6b550eb592ceb0b56b`.
+- Main HEAD после слияния: `53cdf81adea6e04e26f0af6dfa17bc5701c6f713`.
+- PR №12 остаётся draft, HEAD `7535300503c58dbd8cc761ecc5b9a4e6b8e69ad7`, CI PASS run `42395654747`, base всё ещё `work/native-turn-runtime-core`. Эта base branch уже слита squash, поэтому PR12 нельзя просто ретаргетить на main без проверки: squash merge не сохраняет исходную ancestry PR11, и это может продублировать PR11 изменения в diff. Следующая задача — безопасно перебазировать/пересобрать только изменения PR12 поверх актуального main, проверить diff, оставить PR12 draft до полного CI и ревью.
+- PR №10 остаётся open, HEAD `83e7062658f7964891ea8b2956f44556d7c45362`; CI run на актуальном HEAD отсутствует. Mergeability требует повторной проверки после обновления ветки.
