@@ -194,51 +194,61 @@ class VkChallengeWebViewActivity : Activity() {
             return
         }
 
-        WebViewCompat.addWebMessageListener(
-            webView,
-            BRIDGE_NAME,
-            ALLOWED_ORIGIN_RULES,
-        ) { view, message, sourceOrigin, _, _ ->
-            if (
-                view !== webView ||
-                !isAllowedOrigin(sourceOrigin) ||
-                message.data.length > MAX_BRIDGE_MESSAGE_LENGTH
-            ) {
-                return@addWebMessageListener
-            }
-
-            val token = try {
-                val payload = JSONObject(message.data)
-                if (payload.optString("type") != BRIDGE_MESSAGE_TYPE) {
-                    null
-                } else {
-                    payload.optString("token")
-                        .takeIf { it.isNotBlank() && it.length <= MAX_TOKEN_LENGTH }
-                }
-            } catch (_: Exception) {
-                null
-            }
-
-            if (token != null) {
-                challengeToken = token
-                status.text = "Ответ CAPTCHA получен. Ожидается проверка VK после возврата в GHONCHA."
-            }
+        try {
+    WebViewCompat.addWebMessageListener(
+        webView,
+        BRIDGE_NAME,
+        ALLOWED_ORIGIN_RULES,
+    ) { view, message, sourceOrigin, _, _ ->
+        if (
+            view !== webView ||
+            !isAllowedOrigin(sourceOrigin) ||
+            message.data.length > MAX_BRIDGE_MESSAGE_LENGTH
+        ) {
+            return@addWebMessageListener
         }
 
-        messageBridgeInstalled = true
-        observerScript = WebViewCompat.addDocumentStartJavaScript(
-            webView,
-            CHALLENGE_OBSERVER_SCRIPT,
-            ALLOWED_ORIGIN_RULES,
-        )
+        val token = try {
+            val payload = JSONObject(message.data)
+            if (payload.optString("type") != BRIDGE_MESSAGE_TYPE) {
+                null
+            } else {
+                payload.optString("token")
+                    .takeIf { it.isNotBlank() && it.length <= MAX_TOKEN_LENGTH }
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+        if (token != null) {
+            challengeToken = token
+            status.text = "Ответ CAPTCHA получен. Ожидается проверка VK после возврата в GHONCHA."
+        }
+    }
+
+    messageBridgeInstalled = true
+    observerScript = WebViewCompat.addDocumentStartJavaScript(
+        webView,
+        CHALLENGE_OBSERVER_SCRIPT,
+        ALLOWED_ORIGIN_RULES,
+    )
+        } catch (_: RuntimeException) {
+            observerScript?.let { runCatching { it.remove() } }
+            observerScript = null
+            if (messageBridgeInstalled) {
+                runCatching { WebViewCompat.removeWebMessageListener(webView, BRIDGE_NAME) }
+                messageBridgeInstalled = false
+            }
+            status.text = "Автопередача ответа недоступна. Завершите проверку и вернитесь в GHONCHA."
+        }
     }
 
     override fun onDestroy() {
         if (::webView.isInitialized) {
-            observerScript?.remove()
+            observerScript?.let { runCatching { it.remove() } }
             observerScript = null
             if (messageBridgeInstalled) {
-                WebViewCompat.removeWebMessageListener(webView, BRIDGE_NAME)
+                runCatching { WebViewCompat.removeWebMessageListener(webView, BRIDGE_NAME) }
                 messageBridgeInstalled = false
             }
             webView.stopLoading()
