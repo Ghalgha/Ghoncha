@@ -18,6 +18,8 @@ internal object VkChallengeUrlPolicy {
         "login.vk.ru",
     )
 
+    val originRules: Set<String> = allowedHosts.map { "https://$it" }.toSet()
+
     fun allows(value: String): Boolean = try {
         val uri = URI(value)
         val host = uri.host?.lowercase() ?: return false
