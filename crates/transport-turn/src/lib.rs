@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "std")]
+extern crate std;
+
 //! Sans-I/O UDP TURN client adapter.
 //!
 //! This crate owns TURN protocol state only. The caller owns and drives the UDP
