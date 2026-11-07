@@ -612,7 +612,11 @@ mod tests {
         );
         let wire = &socket.socket().writes;
         assert!(!wire.is_empty());
-        assert!(!wire.windows(b"TURN Allocate".len()).any(|part| part == b"TURN Allocate"));
+        assert!(
+            !wire
+                .windows(b"TURN Allocate".len())
+                .any(|part| part == b"TURN Allocate")
+        );
         assert!(socket.tls().is_handshaking());
     }
 
