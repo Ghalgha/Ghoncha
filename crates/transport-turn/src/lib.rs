@@ -1266,7 +1266,7 @@ mod tests {
     fn driver_exposes_the_protocol_wait_until_deadline_to_the_reactor() {
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         socket.set_nonblocking(true).unwrap();
-        let mut driver = TurnUdpDriver::new(
+        let mut driver: TurnUdpDriver<std::net::UdpSocket> = TurnUdpDriver::new(
             socket,
             "198.51.100.1:3478".parse().unwrap(),
             "test-user",
