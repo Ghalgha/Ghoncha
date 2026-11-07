@@ -34,6 +34,19 @@ class VkCallsResponseParserTest {
     }
 
     @Test
+    fun normalizesScientificNumericCaptchaTimestamp() {
+        val result = VkCallsResponseParser.parse(
+            """{"error":{"error_code":14,"redirect_uri":"https://id.vk.ru/captcha?session_token=opaque","captcha_sid":12345,"captcha_ts":1.712345678E9,"captcha_attempt":2}}"""
+                .toByteArray(),
+        )
+
+        assertTrue(result is VkCallsResult.Challenge)
+        result as VkCallsResult.Challenge
+        assertEquals("1712345678", result.captchaTs)
+        assertEquals("2", result.captchaAttempt)
+    }
+
+    @Test
     fun classifiesRateLimitAndRejectsUntrustedChallengeUrl() {
         assertTrue(
             VkCallsResponseParser.parse(
