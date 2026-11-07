@@ -258,6 +258,7 @@ mod android {
         NoReadinessInterest,
         CapacityReached,
         DuplicateToken,
+        DuplicateSocket,
         UnknownToken,
         SystemError(i32),
     }
@@ -300,6 +301,14 @@ mod android {
                 .any(|entry| entry.token == token)
             {
                 return Err(AndroidPollerError::DuplicateToken);
+            }
+            if self
+                .registrations
+                .iter()
+                .flatten()
+                .any(|entry| entry.fd == socket.raw_fd())
+            {
+                return Err(AndroidPollerError::DuplicateSocket);
             }
             let slot = self
                 .registrations
@@ -355,6 +364,10 @@ mod android {
             timeout: std::time::Duration,
             output: &mut [AndroidPollEvent],
         ) -> Result<usize, AndroidPollerError> {
+            if output.is_empty() {
+                return Ok(0);
+            }
+
             let mut descriptors = [PollFd {
                 fd: -1,
                 events: 0,
@@ -375,7 +388,12 @@ mod android {
 
             let descriptor_count =
                 u32::try_from(count).map_err(|_| AndroidPollerError::CapacityReached)?;
-            let timeout_ms = timeout.as_millis().min(c_int::MAX as u128) as c_int;
+            let timeout_ms = timeout
+                .as_nanos()
+                .saturating_add(999_999)
+                .checked_div(1_000_000)
+                .unwrap_or(0)
+                .min(c_int::MAX as u128) as c_int;
             // SAFETY: descriptors contains descriptor_count initialized pollfd
             // entries; the kernel writes only their revents fields.
             let result = unsafe {
