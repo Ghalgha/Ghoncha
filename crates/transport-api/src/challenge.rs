@@ -191,33 +191,33 @@ impl ChallengeSession {
     }
 
     fn transition(&mut self, next: ChallengePhase) -> Result<(), ChallengeError> {
-        let allowed = match (self.phase, next) {
+        let allowed = matches!(
+            (self.phase, next),
             (ChallengePhase::Idle, ChallengePhase::Detected)
-            | (ChallengePhase::Accepted, ChallengePhase::Detected)
-            | (ChallengePhase::Detected, ChallengePhase::AwaitingUser)
-            | (ChallengePhase::Solving, ChallengePhase::AwaitingUser)
-            | (ChallengePhase::Solving, ChallengePhase::Submitted)
-            | (ChallengePhase::AwaitingUser, ChallengePhase::Submitted)
-            | (ChallengePhase::Rejected, ChallengePhase::AwaitingUser)
-            | (ChallengePhase::Submitted, ChallengePhase::Accepted)
-            | (ChallengePhase::Submitted, ChallengePhase::Rejected)
-            | (ChallengePhase::Detected, ChallengePhase::Expired)
-            | (ChallengePhase::Solving, ChallengePhase::Expired)
-            | (ChallengePhase::AwaitingUser, ChallengePhase::Expired)
-            | (ChallengePhase::Submitted, ChallengePhase::Expired)
-            | (ChallengePhase::Rejected, ChallengePhase::Expired)
-            | (ChallengePhase::Detected, ChallengePhase::RateLimited)
-            | (ChallengePhase::Solving, ChallengePhase::RateLimited)
-            | (ChallengePhase::AwaitingUser, ChallengePhase::RateLimited)
-            | (ChallengePhase::Submitted, ChallengePhase::RateLimited)
-            | (ChallengePhase::Rejected, ChallengePhase::RateLimited)
-            | (ChallengePhase::Detected, ChallengePhase::Failed)
-            | (ChallengePhase::Solving, ChallengePhase::Failed)
-            | (ChallengePhase::AwaitingUser, ChallengePhase::Failed)
-            | (ChallengePhase::Submitted, ChallengePhase::Failed)
-            | (ChallengePhase::Rejected, ChallengePhase::Failed) => true,
-            _ => false,
-        };
+                | (ChallengePhase::Accepted, ChallengePhase::Detected)
+                | (ChallengePhase::Detected, ChallengePhase::AwaitingUser)
+                | (ChallengePhase::Solving, ChallengePhase::AwaitingUser)
+                | (ChallengePhase::Solving, ChallengePhase::Submitted)
+                | (ChallengePhase::AwaitingUser, ChallengePhase::Submitted)
+                | (ChallengePhase::Rejected, ChallengePhase::AwaitingUser)
+                | (ChallengePhase::Submitted, ChallengePhase::Accepted)
+                | (ChallengePhase::Submitted, ChallengePhase::Rejected)
+                | (ChallengePhase::Detected, ChallengePhase::Expired)
+                | (ChallengePhase::Solving, ChallengePhase::Expired)
+                | (ChallengePhase::AwaitingUser, ChallengePhase::Expired)
+                | (ChallengePhase::Submitted, ChallengePhase::Expired)
+                | (ChallengePhase::Rejected, ChallengePhase::Expired)
+                | (ChallengePhase::Detected, ChallengePhase::RateLimited)
+                | (ChallengePhase::Solving, ChallengePhase::RateLimited)
+                | (ChallengePhase::AwaitingUser, ChallengePhase::RateLimited)
+                | (ChallengePhase::Submitted, ChallengePhase::RateLimited)
+                | (ChallengePhase::Rejected, ChallengePhase::RateLimited)
+                | (ChallengePhase::Detected, ChallengePhase::Failed)
+                | (ChallengePhase::Solving, ChallengePhase::Failed)
+                | (ChallengePhase::AwaitingUser, ChallengePhase::Failed)
+                | (ChallengePhase::Submitted, ChallengePhase::Failed)
+                | (ChallengePhase::Rejected, ChallengePhase::Failed)
+        );
 
         if !allowed {
             return Err(ChallengeError::InvalidTransition {
