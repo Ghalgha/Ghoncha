@@ -1,10 +1,15 @@
-//! Android-only JNI bootstrap for platform certificate verification.
+//! Android-only JNI bootstrap and native socket ownership boundary.
 //!
 //! This crate keeps Android/JVM integration out of the portable transport core.
 
 #[cfg(target_os = "android")]
 mod android {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::collections::HashMap;
+    use std::ffi::c_void;
+    use std::os::raw::c_int;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+    use std::sync::{Mutex, OnceLock};
 
     use jni::EnvUnowned;
     use jni::errors::ThrowRuntimeExAndDefault;
@@ -12,6 +17,121 @@ mod android {
     use jni::objects::{JClass, JObject};
 
     static ANDROID_VERIFIER_INITIALIZED: AtomicBool = AtomicBool::new(false);
+    static NEXT_SOCKET_HANDLE: AtomicI64 = AtomicI64::new(1);
+    static UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, OwnedFd>>> = OnceLock::new();
+
+    const F_GETFD: c_int = 1;
+    const F_SETFD: c_int = 2;
+    const FD_CLOEXEC: c_int = 1;
+    const F_GETFL: c_int = 3;
+    const F_SETFL: c_int = 4;
+    const O_NONBLOCK: c_int = 0x800;
+    const SOL_SOCKET: c_int = 1;
+    const SO_TYPE: c_int = 3;
+    const SOCK_DGRAM: c_int = 2;
+
+    unsafe extern "C" {
+        fn dup(oldfd: c_int) -> c_int;
+        fn close(fd: c_int) -> c_int;
+        fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
+        fn getsockopt(
+            fd: c_int,
+            level: c_int,
+            optname: c_int,
+            optval: *mut c_void,
+            optlen: *mut u32,
+        ) -> c_int;
+    }
+
+    fn socket_table() -> &'static Mutex<HashMap<i64, OwnedFd>> {
+        UDP_SOCKETS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Duplicates and validates an Android UDP socket descriptor.
+    ///
+    /// The caller retains ownership of the supplied descriptor. Rust owns only
+    /// the duplicate and stores it behind an opaque positive handle. The
+    /// duplicate shares the kernel socket and file-status flags with the source.
+    fn duplicate_udp_socket(source_fd: c_int) -> Option<i64> {
+        if source_fd < 0 {
+            return None;
+        }
+
+        // SAFETY: dup does not take ownership of source_fd and returns a new fd.
+        let duplicated_fd = unsafe { dup(source_fd) };
+        if duplicated_fd < 0 {
+            return None;
+        }
+
+        // SAFETY: duplicated_fd is a fresh descriptor returned by dup.
+        let owned_fd = unsafe { OwnedFd::from_raw_fd(duplicated_fd) };
+        let fd = duplicated_fd;
+
+        // Verify that this is a datagram socket, not a file or stream socket.
+        let mut socket_type: c_int = 0;
+        let mut option_len = std::mem::size_of::<c_int>() as u32;
+        // SAFETY: pointers reference writable values of the advertised lengths.
+        let socket_type_result = unsafe {
+            getsockopt(
+                fd,
+                SOL_SOCKET,
+                SO_TYPE,
+                (&mut socket_type as *mut c_int).cast(),
+                &mut option_len,
+            )
+        };
+        if socket_type_result != 0 || socket_type != SOCK_DGRAM {
+            return None;
+        }
+
+        // Set close-on-exec on the duplicate without changing the source fd's
+        // descriptor flags. O_NONBLOCK is a shared open-file-description flag.
+        // SAFETY: fcntl is called with valid commands and scalar arguments.
+        let descriptor_flags = unsafe { fcntl(fd, F_GETFD) };
+        if descriptor_flags < 0
+            // SAFETY: descriptor_flags came from F_GETFD above.
+            || unsafe { fcntl(fd, F_SETFD, descriptor_flags | FD_CLOEXEC) } < 0
+        {
+            return None;
+        }
+
+        // Ensure the descriptor can be integrated into a poll/epoll reactor.
+        // This status flag is shared with the Java duplicate; after adoption the
+        // Java socket must not be used for I/O.
+        // SAFETY: fcntl is called with valid commands and scalar arguments.
+        let status_flags = unsafe { fcntl(fd, F_GETFL) };
+        if status_flags < 0
+            // SAFETY: status_flags came from F_GETFL above.
+            || unsafe { fcntl(fd, F_SETFL, status_flags | O_NONBLOCK) } < 0
+        {
+            return None;
+        }
+
+        let handle = NEXT_SOCKET_HANDLE.fetch_add(1, Ordering::Relaxed);
+        if handle <= 0 {
+            return None;
+        }
+
+        let mut sockets = socket_table().lock().ok()?;
+        if sockets.insert(handle, owned_fd).is_some() {
+            return None;
+        }
+        Some(handle)
+    }
+
+    /// Removes a socket from the native registry and transfers ownership to
+    /// the Rust reactor. Returns None for unknown or already-consumed handles.
+    pub fn take_udp_socket(handle: i64) -> Option<OwnedFd> {
+        if handle <= 0 {
+            return None;
+        }
+        socket_table().lock().ok()?.remove(&handle)
+    }
+
+    /// Closes a socket handle that has not been transferred to the reactor.
+    fn close_udp_socket(handle: i64) -> bool {
+        take_udp_socket(handle).is_some()
+    }
 
     /// Initializes the Android system-trust verifier before any TLS connection starts.
     ///
@@ -30,6 +150,33 @@ mod android {
             Ok(())
         });
         outcome.resolve::<ThrowRuntimeExAndDefault>();
+    }
+
+    /// Duplicates a ParcelFileDescriptor fd and returns an opaque native handle.
+    ///
+    /// Returns zero on validation or allocation failure. The Java-owned fd must
+    /// still be closed by the caller regardless of the result.
+    #[jni_mangle("org.ghoncha.app.NativeBootstrap")]
+    #[allow(non_snake_case)]
+    pub fn adoptUdpSocket(
+        _unowned_env: EnvUnowned<'_>,
+        _class: JClass<'_>,
+        source_fd: i32,
+    ) -> i64 {
+        duplicate_udp_socket(source_fd)
+            .filter(|handle| *handle > 0)
+            .unwrap_or(0)
+    }
+
+    /// Closes a native UDP handle that has not been transferred to a reactor.
+    #[jni_mangle("org.ghoncha.app.NativeBootstrap")]
+    #[allow(non_snake_case)]
+    pub fn closeUdpSocket(
+        _unowned_env: EnvUnowned<'_>,
+        _class: JClass<'_>,
+        handle: i64,
+    ) -> bool {
+        close_udp_socket(handle)
     }
 
     /// Builds a Rustls client configuration backed by Android's system trust manager.
@@ -52,4 +199,4 @@ mod android {
 }
 
 #[cfg(target_os = "android")]
-pub use android::platform_tls_client_config;
+pub use android::{platform_tls_client_config, take_udp_socket};
