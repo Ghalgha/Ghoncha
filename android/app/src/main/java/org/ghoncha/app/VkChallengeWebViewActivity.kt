@@ -3,6 +3,7 @@ package org.ghoncha.app
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
@@ -15,18 +16,28 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import org.json.JSONObject
 import java.net.URI
 
 /**
  * First-party WebView surface for a user-authorized VK challenge.
  *
- * The WebView keeps its own real Android WebView identity and cookie store.
- * This class deliberately does not spoof the user agent, inject synthetic
- * pointer events, randomize browser properties, or export cookies to callers.
- * The caller must independently verify challenge acceptance with VK.
+ * The WebView keeps its normal Android identity and cookie store. A
+ * document-start observer reports only the success_token returned by the
+ * VK captchaNotRobot.check endpoint. The token is an untrusted challenge
+ * response, not proof of acceptance; the credential provider must verify it
+ * with VK before changing provider state or publishing TURN credentials.
+ *
+ * No fingerprint spoofing, synthetic pointer events, or automated gestures
+ * are performed here.
  */
 class VkChallengeWebViewActivity : Activity() {
     private lateinit var webView: WebView
+    private lateinit var status: TextView
+    private var challengeToken: String? = null
+    private var documentStartScriptInstalled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,12 +58,25 @@ class VkChallengeWebViewActivity : Activity() {
         }
 
         val instructions = TextView(this).apply {
-            text = "Завершите проверку VK в этом окне. После проверки GHONCHA подтвердит результат на стороне VK."
+            text = "Пройдите проверку VK вручную. GHONCHA передаст полученный ответ провайдеру и отдельно проверит его принятие сервером."
             textSize = 14f
-            setPadding(20, 16, 20, 16)
+            setPadding(20, 16, 20, 8)
         }
         root.addView(
             instructions,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+
+        status = TextView(this).apply {
+            text = "Ожидание проверки…"
+            textSize = 13f
+            setPadding(20, 4, 20, 12)
+        }
+        root.addView(
+            status,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -70,13 +94,12 @@ class VkChallengeWebViewActivity : Activity() {
             safeBrowsingEnabled = true
         }
         CookieManager.getInstance().setAcceptCookie(true)
+        installChallengeObserver()
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
-            ): Boolean {
-                return !isAllowedUrl(request.url.toString())
-            }
+            ): Boolean = !isAllowedUrl(request.url.toString())
 
             override fun onSafeBrowsingHit(
                 view: WebView,
@@ -109,10 +132,14 @@ class VkChallengeWebViewActivity : Activity() {
             }
         }
         val completed = Button(this).apply {
-            text = "Проверка завершена"
+            text = "Вернуться в GHONCHA"
             setOnClickListener {
                 CookieManager.getInstance().flush()
-                setResult(RESULT_OK)
+                val result = Intent().apply {
+                    putExtra(EXTRA_USER_CONFIRMED, true)
+                    challengeToken?.let { putExtra(EXTRA_CHALLENGE_TOKEN, it) }
+                }
+                setResult(RESULT_OK, result)
                 finish()
             }
         }
@@ -130,6 +157,55 @@ class VkChallengeWebViewActivity : Activity() {
         webView.loadUrl(challengeUrl)
     }
 
+    private fun installChallengeObserver() {
+        if (
+            !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) ||
+            !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+        ) {
+            status.text = "Автопередача ответа недоступна в этой версии WebView. Завершите проверку и вернитесь в GHONCHA."
+            return
+        }
+
+        WebViewCompat.addWebMessageListener(
+            webView,
+            BRIDGE_NAME,
+            ALLOWED_ORIGIN_RULES,
+        ) { view, message, sourceOrigin, isMainFrame, _ ->
+            if (
+                view !== webView ||
+                !isMainFrame ||
+                !isAllowedOrigin(sourceOrigin) ||
+                message.data.length > MAX_BRIDGE_MESSAGE_LENGTH
+            ) {
+                return@addWebMessageListener
+            }
+
+            val token = try {
+                val payload = JSONObject(message.data)
+                if (payload.optString("type") != BRIDGE_MESSAGE_TYPE) {
+                    null
+                } else {
+                    payload.optString("token")
+                        .takeIf { it.isNotBlank() && it.length <= MAX_TOKEN_LENGTH }
+                }
+            } catch (_: Exception) {
+                null
+            }
+
+            if (token != null) {
+                challengeToken = token
+                status.text = "Ответ CAPTCHA получен. Ожидается проверка VK после возврата в GHONCHA."
+            }
+        }
+
+        WebViewCompat.addDocumentStartJavaScript(
+            webView,
+            CHALLENGE_OBSERVER_SCRIPT,
+            ALLOWED_ORIGIN_RULES,
+        )
+        documentStartScriptInstalled = true
+    }
+
     override fun onDestroy() {
         if (::webView.isInitialized) {
             webView.stopLoading()
@@ -137,6 +213,7 @@ class VkChallengeWebViewActivity : Activity() {
             webView.webViewClient = WebViewClient()
             webView.destroy()
         }
+        challengeToken = null
         super.onDestroy()
     }
 
@@ -153,12 +230,26 @@ class VkChallengeWebViewActivity : Activity() {
         }
     }
 
+    private fun isAllowedOrigin(origin: Uri): Boolean {
+        val host = origin.host?.lowercase() ?: return false
+        return origin.scheme == "https" &&
+            (origin.port == -1 || origin.port == 443) &&
+            host in ALLOWED_HOSTS
+    }
+
     companion object {
         fun createIntent(context: Context, challengeUrl: String): Intent =
             Intent(context, VkChallengeWebViewActivity::class.java)
                 .putExtra(EXTRA_CHALLENGE_URL, challengeUrl)
 
         const val EXTRA_CHALLENGE_URL = "org.ghoncha.app.VK_CHALLENGE_URL"
+        const val EXTRA_CHALLENGE_TOKEN = "org.ghoncha.app.VK_CHALLENGE_TOKEN"
+        const val EXTRA_USER_CONFIRMED = "org.ghoncha.app.VK_USER_CONFIRMED"
+
+        private const val BRIDGE_NAME = "GhonchaCaptcha"
+        private const val BRIDGE_MESSAGE_TYPE = "vk_captcha_success_token"
+        private const val MAX_BRIDGE_MESSAGE_LENGTH = 16 * 1024
+        private const val MAX_TOKEN_LENGTH = 8 * 1024
 
         private val ALLOWED_HOSTS = setOf(
             "vk.com",
@@ -170,5 +261,75 @@ class VkChallengeWebViewActivity : Activity() {
             "id.vk.ru",
             "login.vk.ru",
         )
+
+        private val ALLOWED_ORIGIN_RULES = ALLOWED_HOSTS
+            .map { "https://$it" }
+            .toSet()
+
+        /**
+         * Observe the VK challenge response without changing the request,
+         * response, browser fingerprint, or user interaction. The response
+         * body is cloned/read so the page receives its original response.
+         */
+        private val CHALLENGE_OBSERVER_SCRIPT = """
+            (() => {
+              if (window.__ghonchaCaptchaObserverInstalled) return;
+              window.__ghonchaCaptchaObserverInstalled = true;
+
+              const report = (url, body) => {
+                if (typeof url !== "string" ||
+                    !url.includes("captchaNotRobot.check") ||
+                    typeof body !== "string" ||
+                    body.length > 65536) return;
+
+                try {
+                  const parsed = JSON.parse(body);
+                  const token = parsed &&
+                    parsed.data &&
+                    parsed.data.response &&
+                    parsed.data.response.success_token;
+                  if (typeof token === "string" &&
+                      token.length > 0 &&
+                      token.length <= $MAX_TOKEN_LENGTH &&
+                      window.$BRIDGE_NAME) {
+                    window.$BRIDGE_NAME.postMessage(JSON.stringify({
+                      type: "$BRIDGE_MESSAGE_TYPE",
+                      token: token
+                    }));
+                  }
+                } catch (_) {}
+              };
+
+              const originalFetch = window.fetch;
+              if (typeof originalFetch === "function") {
+                window.fetch = function(input, init) {
+                  const url = typeof input === "string"
+                    ? input
+                    : input && input.url;
+                  return originalFetch.apply(this, arguments).then(response => {
+                    try {
+                      response.clone().text().then(body => report(url, body));
+                    } catch (_) {}
+                    return response;
+                  });
+                };
+              }
+
+              const originalOpen = XMLHttpRequest.prototype.open;
+              const originalSend = XMLHttpRequest.prototype.send;
+              XMLHttpRequest.prototype.open = function(method, url) {
+                this.__ghonchaCaptchaUrl = String(url);
+                return originalOpen.apply(this, arguments);
+              };
+              XMLHttpRequest.prototype.send = function() {
+                this.addEventListener("load", function() {
+                  try {
+                    report(this.__ghonchaCaptchaUrl, this.responseText);
+                  } catch (_) {}
+                });
+                return originalSend.apply(this, arguments);
+              };
+            })();
+        """.trimIndent()
     }
 }
