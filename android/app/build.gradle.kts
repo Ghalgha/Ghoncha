@@ -76,3 +76,12 @@ android {
 dependencies {
     implementation("rustls:rustls-platform-verifier")
 }
+
+val cargoMetadata = tasks.register<Exec>("cargoMetadata") {
+    workingDir = rootProject.projectDir.parentFile
+    commandLine("cargo", "metadata", "--format-version", "1")
+}
+
+tasks.named("preBuild") {
+    dependsOn(cargoMetadata)
+}
