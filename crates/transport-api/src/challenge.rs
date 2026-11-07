@@ -188,6 +188,7 @@ impl ChallengeSession {
             | (ChallengePhase::Solving, ChallengePhase::AwaitingUser)
             | (ChallengePhase::Solving, ChallengePhase::Submitted)
             | (ChallengePhase::AwaitingUser, ChallengePhase::Submitted)
+            | (ChallengePhase::Rejected, ChallengePhase::AwaitingUser)
             | (ChallengePhase::Submitted, ChallengePhase::Accepted)
             | (ChallengePhase::Submitted, ChallengePhase::Rejected)
             | (ChallengePhase::Detected, ChallengePhase::Expired)
