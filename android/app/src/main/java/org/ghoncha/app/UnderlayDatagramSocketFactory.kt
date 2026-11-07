@@ -1,28 +1,36 @@
 package org.ghoncha.app
 
 import java.net.DatagramSocket
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.StandardProtocolFamily
+import java.nio.channels.DatagramChannel
 
 /**
- * A UDP socket prepared for one Android underlay-network generation.
+ * A UDP channel prepared for one Android underlay-network generation.
  *
- * The socket is bound to the selected network and has an ephemeral local port.
- * The caller owns [socket] and must close it exactly once when the transport
- * session is retired. This object does not transfer the descriptor to Rust.
+ * [channel] is the sole ownership handle and must be closed exactly once.
+ * [socket] is the channel's socket view, used only for Android protect/bind
+ * operations. This object does not transfer the descriptor to Rust.
  */
 internal data class PreparedUnderlayDatagramSocket(
-    val socket: DatagramSocket,
+    val channel: DatagramChannel,
     val serverAddress: InetSocketAddress,
     val localAddress: InetSocketAddress,
     val networkGeneration: Long,
-)
+) {
+    val socket: DatagramSocket
+        get() = channel.socket()
+}
 
 /**
- * Creates UDP sockets without ever falling back to the process default network.
+ * Creates UDP channels without falling back to the process default network.
  *
  * DNS resolution is injected so Android callers can use Network.getAllByName().
- * The socket is protected and network-bound before it is locally bound or used.
+ * The channel family is selected from the resolved address. The socket is
+ * protected and network-bound before it is locally bound or used.
  */
 internal class UnderlayDatagramSocketFactory(
     private val networkGeneration: Long,
@@ -38,14 +46,22 @@ internal class UnderlayDatagramSocketFactory(
             .firstOrNull { !it.isAnyLocalAddress && !it.isMulticastAddress }
             ?: throw IllegalStateException("TURN host did not resolve to a usable address")
 
-        val socket = DatagramSocket(null)
+        val family = when (address) {
+            is Inet4Address -> StandardProtocolFamily.INET
+            is Inet6Address -> StandardProtocolFamily.INET6
+            else -> throw IllegalStateException("Unsupported TURN server address family")
+        }
+        val channel = DatagramChannel.open(family)
         try {
+            val socket = channel.socket()
             UnderlayDatagramSocketPreparer.prepare(
                 socket = socket,
                 protect = protect,
                 bindToNetwork = bindToNetwork,
             )
             socket.bind(InetSocketAddress(0))
+            channel.configureBlocking(false)
+
             check(socket.isBound && !socket.isClosed && !socket.isConnected) {
                 "UDP socket did not reach the prepared state"
             }
@@ -53,15 +69,18 @@ internal class UnderlayDatagramSocketFactory(
             val local = socket.localSocketAddress as? InetSocketAddress
                 ?: error("UDP socket has no internet socket address")
             check(local.port != 0) { "UDP socket did not receive an ephemeral port" }
+            check((local.address is Inet4Address) == (address is Inet4Address)) {
+                "UDP socket and TURN endpoint address families differ"
+            }
 
             return PreparedUnderlayDatagramSocket(
-                socket = socket,
+                channel = channel,
                 serverAddress = InetSocketAddress(address, port),
                 localAddress = local,
                 networkGeneration = networkGeneration,
             )
         } catch (failure: Throwable) {
-            socket.close()
+            channel.close()
             throw failure
         }
     }
