@@ -978,6 +978,9 @@ mod tests {
 
         let response = b"TURN Allocate Success";
         assert_eq!(server.writer().write(response).unwrap(), response.len());
+        // Send the final application record and authenticated close_notify
+        // together, then verify the adapter drains plaintext before EOF.
+        server.send_close_notify();
         let mut response_ciphertext = std::vec::Vec::new();
         server.write_tls(&mut response_ciphertext).unwrap();
         assert!(!response_ciphertext.is_empty());
@@ -989,6 +992,8 @@ mod tests {
         let mut plaintext = [0_u8; 64];
         let plaintext_len = socket.read(&mut plaintext).unwrap();
         assert_eq!(&plaintext[..plaintext_len], response);
+        assert_eq!(socket.read(&mut plaintext), Ok(0));
+        assert_eq!(socket.read(&mut plaintext), Ok(0));
     }
 
     #[test]
