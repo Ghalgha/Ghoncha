@@ -269,9 +269,13 @@ class VkChallengeWebViewActivity : Activity() {
         VkChallengeUrlPolicy.allows(origin.toString())
 
     companion object {
-        fun createIntent(context: Context, challengeUrl: String): Intent =
-            Intent(context, VkChallengeWebViewActivity::class.java)
+        fun createIntent(context: Context, challengeUrl: String): Intent {
+            require(VkChallengeUrlPolicy.allows(challengeUrl)) {
+                "Challenge URL must use an allowlisted VK HTTPS origin"
+            }
+            return Intent(context, VkChallengeWebViewActivity::class.java)
                 .putExtra(EXTRA_CHALLENGE_URL, challengeUrl)
+        }
 
         const val EXTRA_CHALLENGE_URL = "org.ghoncha.app.VK_CHALLENGE_URL"
         const val EXTRA_CHALLENGE_TOKEN = "org.ghoncha.app.VK_CHALLENGE_TOKEN"
