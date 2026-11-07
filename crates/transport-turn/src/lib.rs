@@ -1291,6 +1291,14 @@ mod tests {
     }
 
     #[test]
+    fn queue_allocation_failure_is_reported_without_panicking() {
+        assert_eq!(
+            DatagramSendQueue::<{ usize::MAX }, 1, 1>::try_new().err(),
+            Some(DatagramQueueAllocationError)
+        );
+    }
+
+    #[test]
     fn protocol_deadline_conversion_preserves_nonnegative_monotonic_nanoseconds() {
         assert_eq!(
             monotonic_deadline(Instant::from_nanos(1_234_567_890)),
