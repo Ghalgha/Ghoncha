@@ -362,7 +362,7 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/4
 - **[ЧАСТИЧНО]** Native socket lifecycle подготовлен, но не подключён к persistent multi-allocation TURN runtime.
 - **[НЕ РЕАЛИЗОВАНО]** Android `VpnService`, TUN lifecycle, TURN driver orchestration, единый reactor TUN/TURN/TLS и end-to-end tunnel.
 
-CI для HEAD `ce603d22...`: Rust format/Clippy/workspace tests прошли; Android JVM/build pipeline ещё выполняется. Device/instrumentation tests и live network interoperability не подтверждены.
+CI для HEAD `ce603d22...`: **все задачи прошли**, включая Rust format/Clippy/workspace tests и Android debug build. PR №4 готов к слиянию после разрешения пользователя. Device/instrumentation tests и live network interoperability не подтверждены.
 
 ### 14.3. Последующая ветка PR №6 — heap-backed TURN queues
 
@@ -373,15 +373,16 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/6
 
 - **[РЕАЛИЗОВАНО В PR №6]** Heap-backed bounded TURN send queues с сохранением compile-time record/byte limits.
 - **[РЕАЛИЗОВАНО В PR №6]** Fallible queue allocation и `TurnError::AllocationFailed` в `TurnUdpDriver::new`.
-- **[ТЕСТЫ PASS НА ЭКВИВАЛЕНТНОМ ПРЕДЫДУЩЕМ HEAD]** Rust format, Clippy и workspace tests.
+- **[CI PASS]** Rust format, Clippy, workspace tests и Android debug build на PR-head `a69dd643c5c162dc918e3f93b4a09170a8020c38`.
 - PR №5 закрыт без слияния и заменён PR №6, чтобы исключить лишний diff с удалением `PROJECT_CONTEXT.md`.
 
 ### 14.4. Последующая ветка PR №7 — Android underlay network monitor
 
 Ветка: `work/android-underlay-network-monitor`  
+HEAD: `8c990a82406d8fc88a4685ad7abeaf6ca8e16385`  
 Основана на PR №4.  
 PR: https://github.com/Ghalgha/Ghoncha/pull/7  
-Состояние: открыт draft; CI ожидается/выполняется; не слит.
+Состояние: открыт draft; Rust format/Clippy/workspace tests прошли; Android build выполняется; не слит.
 
 - **[РЕАЛИЗОВАНО В PR №7]** Монитор кандидатов с `NET_CAPABILITY_INTERNET` и `NET_CAPABILITY_NOT_VPN`; автоматический выбор preferred network намеренно не выполняется.
 - **[РЕАЛИЗОВАНО В PR №7]** Snapshot capabilities, validation, metering и transport flags.
