@@ -752,6 +752,46 @@ mod tests {
         assert_eq!(&response_plaintext[..response_len], response);
     }
 
+    #[test]
+    fn authenticated_tls_close_notify_is_reported_as_clean_eof() {
+        let mut client = TlsClientEngine::new(
+            trusted_test_client_config(),
+            ServerName::try_from("example.com").unwrap(),
+        )
+        .unwrap();
+        let mut server = rustls::ServerConnection::new(test_server_config()).unwrap();
+
+        for _ in 0..16 {
+            let client_progress = pump_client_to_server(&mut client, &mut server);
+            let server_progress = pump_server_to_client(&mut server, &mut client);
+            if !client.is_handshaking()
+                && !server.is_handshaking()
+                && !client.wants_write()
+                && !server.wants_write()
+            {
+                break;
+            }
+            assert!(client_progress || server_progress, "TLS handshake stalled");
+        }
+        assert!(client.application_data_ready());
+
+        server.send_close_notify();
+        let mut close_notify = std::vec::Vec::new();
+        server.write_tls(&mut close_notify).unwrap();
+        assert!(!close_notify.is_empty());
+
+        let progress = client.feed_ciphertext(&close_notify).unwrap();
+        assert!(progress.peer_closed);
+        assert!(client.peer_closed());
+
+        let mut plaintext = [0_u8; 64];
+        assert_eq!(client.read_plaintext(&mut plaintext).unwrap(), 0);
+        assert!(matches!(
+            client.write_plaintext(b"TURN Allocate"),
+            Err(TlsEngineError::PeerClosed)
+        ));
+    }
+
     fn client_config() -> Arc<ClientConfig> {
         Arc::new(
             ClientConfig::builder()
