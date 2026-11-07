@@ -226,9 +226,29 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
             .ok_or(TurnUdpRuntimeServiceError::Runtime(
                 TurnUdpRuntimeError::UnknownAllocation,
             ))?;
-        slot.driver
+        let progress = match slot
+            .driver
             .service_ready(ready, now, receive_buffer, on_datagram)
-            .map_err(TurnUdpRuntimeServiceError::Driver)
+        {
+            Ok(progress) => progress,
+            Err(error) => {
+                slot.deadline = None;
+                return Err(TurnUdpRuntimeServiceError::Driver(error));
+            }
+        };
+
+        // Readiness may have delivered TURN control input that changes the
+        // protocol state and its next timer. Re-poll immediately so the shared
+        // reactor never sleeps against a deadline from the pre-readiness state.
+        match slot.driver.poll_control_with_deadline(now) {
+            Ok(control) => slot.deadline = control.next_deadline,
+            Err(error) => {
+                slot.deadline = None;
+                return Err(TurnUdpRuntimeServiceError::Driver(error));
+            }
+        }
+
+        Ok(progress)
     }
 
     /// Queues one peer payload on an allocation selected by flow affinity.
@@ -415,6 +435,36 @@ mod tests {
             .unwrap();
         assert_eq!(progress.sent_datagrams, 1);
         assert_eq!(runtime.has_pending_output(101), Some(false));
+    }
+
+    #[test]
+    fn readiness_refreshes_protocol_deadline() {
+        let mut runtime = TurnUdpRuntime::<MockSocket, 1>::new();
+        runtime
+            .insert(7, 101, driver(40001), MonotonicTime(10))
+            .unwrap();
+        runtime.poll_due(MonotonicTime(10), 1, |_, _, result| {
+            assert!(result.unwrap().queued_control);
+        });
+
+        let later = MonotonicTime(1_000_000);
+        let mut receive = [0_u8; 2048];
+        runtime
+            .service_ready(
+                101,
+                TurnUdpIoReady {
+                    readable: false,
+                    writable: false,
+                    max_receive_datagrams: 0,
+                    max_send_datagrams: 0,
+                },
+                later,
+                &mut receive,
+                |_| {},
+            )
+            .unwrap();
+
+        assert!(runtime.next_deadline().is_some_and(|deadline| deadline > later));
     }
 
     #[test]
