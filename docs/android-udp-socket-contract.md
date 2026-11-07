@@ -1,6 +1,6 @@
 # Android UDP socket contract
 
-Status: implementation contract; no Android application module or Kotlin socket adapter exists in this repository yet.
+Status: the Android app now contains a small, callback-injected Kotlin preparation boundary that enforces protect-before-bind and closes the socket on failure. The VPN service, socket creation, network selection, native ownership transfer, and event-loop integration remain unimplemented.
 
 ## Purpose
 
@@ -19,7 +19,7 @@ For every Allocation and every replacement socket:
 5. Bind a local address/port if required by the socket implementation, then configure non-blocking I/O and register it with the shared event loop.
 6. Only after all preceding steps succeed, hand ownership to the Rust TURN driver and allow the first Allocate request.
 
-The exact ordering of local bind and `Network.bindSocket` must follow the Android API overload and minimum SDK selected by the eventual app module. The invariant is that the socket is unconnected, protected, and bound to the selected Network before its first packet.
+The current `UnderlayDatagramSocketPreparer` enforces the critical `protect()` then `Network.bindSocket()` order on an unconnected `DatagramSocket`; it takes ownership during preparation and closes the socket if either operation fails. The VPN service must supply the real Android callbacks and must not send until preparation returns successfully. The exact ordering of any local-address bind must follow the Android API overload selected by the app. This helper is not yet wired to a `VpnService` or TURN driver.
 
 ## Runtime invariants
 
