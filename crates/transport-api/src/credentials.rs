@@ -42,6 +42,8 @@ pub struct TurnCredentials<'a> {
 }
 
 /// Provider lifecycle, independent from TURN allocation and tunnel state.
+/// ChallengeRequired/ChallengeInProgress describe provider work; they do not
+/// by themselves assert that already-issued credentials or allocations expired.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CredentialProviderState {
     Idle,
@@ -120,7 +122,10 @@ pub trait TurnCredentialProvider {
         budget: IoBudget,
     ) -> Result<CredentialPollOutcome, CredentialProviderError>;
 
-    /// Returns credentials only while the provider is in Ready state.
+    /// Returns currently valid credentials, including previously issued
+    /// credentials that remain usable while a refresh challenge is pending.
+    /// Implementations must return None immediately after expiry or revocation;
+    /// ChallengeRequired alone does not invalidate an existing TURN allocation.
     fn credentials(&self) -> Option<TurnCredentials<'_>>;
 
     /// Cancels acquisition and invalidates credentials when required.
