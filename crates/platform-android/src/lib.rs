@@ -50,3 +50,6 @@ mod android {
         Ok(config)
     }
 }
+
+#[cfg(target_os = "android")]
+pub use android::platform_tls_client_config;
