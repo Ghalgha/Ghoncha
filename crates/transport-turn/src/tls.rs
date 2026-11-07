@@ -917,8 +917,12 @@ mod tests {
 
     #[test]
     fn tls_stream_socket_completes_verified_handshake_and_exchanges_plaintext() {
-        let mut socket =
-            TlsStreamSocket::new(mock_stream(usize::MAX), trusted_test_client_config(), ServerName::try_from("example.com").unwrap()).unwrap();
+        let mut socket = TlsStreamSocket::new(
+            mock_stream(usize::MAX),
+            trusted_test_client_config(),
+            ServerName::try_from("example.com").unwrap(),
+        )
+        .unwrap();
         let mut server = rustls::ServerConnection::new(test_server_config()).unwrap();
 
         // The adapter emits ClientHello through the underlying byte stream.
