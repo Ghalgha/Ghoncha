@@ -2,6 +2,10 @@ import org.gradle.api.provider.ValueSource
 import org.gradle.api.provider.ValueSourceParameters
 import org.gradle.api.file.RegularFileProperty
 
+plugins {
+    id("com.android.application")
+}
+
 abstract class RustlsAndroidArtifactVersion :
     ValueSource<String, RustlsAndroidArtifactVersion.Parameters> {
     interface Parameters : ValueSourceParameters {
@@ -39,10 +43,6 @@ configurations.configureEach {
             because("Android verifier AAR must match the Cargo-locked native shim version")
         }
     }
-}
-
-plugins {
-    id("com.android.application")
 }
 
 android {
