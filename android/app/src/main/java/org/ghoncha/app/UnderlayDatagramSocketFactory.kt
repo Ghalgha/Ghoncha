@@ -34,6 +34,7 @@ internal data class PreparedUnderlayDatagramSocket(
  */
 internal class UnderlayDatagramSocketFactory(
     private val networkGeneration: Long,
+    private val currentNetworkGeneration: () -> Long,
     private val resolveOnNetwork: (String) -> Array<InetAddress>,
     private val protect: (DatagramSocket) -> Boolean,
     private val bindToNetwork: (DatagramSocket) -> Unit,
@@ -41,6 +42,9 @@ internal class UnderlayDatagramSocketFactory(
     fun open(host: String, port: Int): PreparedUnderlayDatagramSocket {
         require(host.isNotBlank()) { "TURN host must not be blank" }
         require(port in 1..65535) { "TURN port is out of range" }
+        check(currentNetworkGeneration() == networkGeneration) {
+            "Network changed before UDP socket creation"
+        }
 
         val address = resolveOnNetwork(host)
             .firstOrNull { !it.isAnyLocalAddress && !it.isMulticastAddress }
@@ -71,6 +75,9 @@ internal class UnderlayDatagramSocketFactory(
             check(local.port != 0) { "UDP socket did not receive an ephemeral port" }
             check((local.address is Inet4Address) == (address is Inet4Address)) {
                 "UDP socket and TURN endpoint address families differ"
+            }
+            check(currentNetworkGeneration() == networkGeneration) {
+                "Network changed while UDP socket was being prepared"
             }
 
             return PreparedUnderlayDatagramSocket(
