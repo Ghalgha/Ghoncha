@@ -19,11 +19,12 @@ The TLS adapter must preserve the exact ordered byte stream expected by TURN. It
 
 ## 2. TLS implementation choice
 
-Use Rustls 0.23 API through a small runtime-neutral, nonblocking adapter. Keep Rustls types behind the TLS adapter boundary; the shared packet and transport API crates must not depend on Android, JNI, or a particular async runtime.
+Use Rustls 0.23 API through a small runtime-neutral, nonblocking adapter (the current upstream documentation resolves to 0.23.46; pin an exact reviewed release when dependencies are introduced). Keep Rustls types behind the TLS adapter boundary; the shared packet and transport API crates must not depend on Android, JNI, or a particular async runtime.
 
 The caller supplies an already-built, verified `Arc<ClientConfig>` and a validated DNS `ServerName`. The adapter creates a `ClientConnection` and exposes explicit handshake/read/write progress. Do not construct a permissive verifier in the transport crate.
 
 The production configuration must:
+- disable TLS 1.3 early data (0-RTT) for TURN and tunnel records; replayable early data is not acceptable for allocation/authentication state or VPN payloads;
 - use Rustls safe protocol/cipher defaults supported by the selected crypto provider;
 - enable TLS 1.3 and retain TLS 1.2 only where deployment compatibility requires it;
 - validate the certificate chain and requested server name;
@@ -54,9 +55,9 @@ Do not use Rustls `complete_io()` in the event-driven driver: it may block and h
 The adapter must drive Rustls explicitly:
 1. On socket-readable readiness, read a bounded ciphertext chunk into Rustls with `read_tls`.
 2. Call `process_new_packets` after each successful TLS input operation.
-3. Drain decrypted plaintext through `reader()` into a bounded TURN input buffer, respecting the TURN parser's drain-before-next-read invariant.
-4. On socket-writable readiness, call `write_tls` and preserve any unwritten ciphertext across partial writes and `WouldBlock`.
-5. Continue handshake progress until `is_handshaking()` is false and pending handshake output has been flushed. Do not expose application data as ready before this condition.
+3. Drain decrypted plaintext through `reader()` into a bounded TURN input buffer, respecting the TURN parser's drain-before-next-read invariant. Respect `wants_read()`: Rustls reports false while plaintext remains available, and callers should drain that plaintext before accepting more ciphertext.
+4. On socket-writable readiness, call `write_tls` and preserve any unwritten ciphertext across partial writes and `WouldBlock`. Rustls retains unsent TLS records internally; keep driving writable readiness while `wants_write()` is true.
+5. Continue handshake progress until `is_handshaking()` is false and pending handshake output has been flushed (`wants_write() == false`). `is_handshaking() == false` alone does not prove the final handshake flight has left the client. Do not expose application data as ready before this condition.
 6. After handshake, move TURN bytes through Rustls `writer()` and decrypted bytes to the TURN parser. Preserve strict stream ordering in both directions.
 7. Handle close-notify, unexpected EOF, fatal TLS alerts and socket errors as terminal transport events. Never reinterpret truncated TLS as clean TURN shutdown.
 
