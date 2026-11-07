@@ -6,6 +6,16 @@ import org.junit.Test
 
 class VkCallsResponseParserTest {
     @Test
+    fun parsesAcceptedAnonymousTokenAfterChallengeRetry() {
+        val result = VkCallsResponseParser.parseAnonymousToken(
+            """{"response":{"token":"temporary-anonymous-token"}}""".toByteArray(),
+        )
+        assertTrue(result is VkCallsResult.AnonymousToken)
+        result as VkCallsResult.AnonymousToken
+        assertEquals("temporary-anonymous-token", result.token)
+    }
+
+    @Test
     fun parsesTurnCredentialsWithoutExposingThemInResultTypeName() {
         val result = VkCallsResponseParser.parse(
             """{"turn_server":{"username":"temporary-user","credential":"temporary-secret","urls":["turn:relay.example:3478?transport=udp","turns:relay.example:5349?transport=tcp"]}}"""
