@@ -9,7 +9,6 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.VpnService
 import android.os.Build
-import android.os.IBinder
 import android.os.ParcelFileDescriptor
 
 /**
@@ -157,7 +156,7 @@ class GhonchaVpnService : VpnService() {
             .setOngoing(true)
             .addAction(
                 Notification.Action.Builder(
-                    null,
+                    android.R.drawable.ic_media_pause,
                     getString(R.string.vpn_stop),
                     stopPendingIntent,
                 ).build(),
