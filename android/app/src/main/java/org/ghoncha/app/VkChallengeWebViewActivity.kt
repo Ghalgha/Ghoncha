@@ -20,7 +20,6 @@ import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONObject
-import java.net.URI
 
 /**
  * First-party WebView surface for a user-authorized VK challenge.
@@ -251,25 +250,11 @@ class VkChallengeWebViewActivity : Activity() {
         super.onDestroy()
     }
 
-    private fun isAllowedUrl(value: String): Boolean {
-        return try {
-            val uri = URI(value)
-            val host = uri.host?.lowercase() ?: return false
-            uri.scheme == "https" &&
-                uri.userInfo == null &&
-                (uri.port == -1 || uri.port == 443) &&
-                host in ALLOWED_HOSTS
-        } catch (_: Exception) {
-            false
-        }
-    }
+    private fun isAllowedUrl(value: String): Boolean =
+        VkChallengeUrlPolicy.allows(value)
 
-    private fun isAllowedOrigin(origin: Uri): Boolean {
-        val host = origin.host?.lowercase() ?: return false
-        return origin.scheme == "https" &&
-            (origin.port == -1 || origin.port == 443) &&
-            host in ALLOWED_HOSTS
-    }
+    private fun isAllowedOrigin(origin: Uri): Boolean =
+        VkChallengeUrlPolicy.allows(origin.toString())
 
     companion object {
         fun createIntent(context: Context, challengeUrl: String): Intent =
@@ -303,20 +288,7 @@ class VkChallengeWebViewActivity : Activity() {
         private const val MAX_BRIDGE_MESSAGE_LENGTH = 16 * 1024
         private const val MAX_TOKEN_LENGTH = 8 * 1024
 
-        private val ALLOWED_HOSTS = setOf(
-            "vk.com",
-            "www.vk.com",
-            "id.vk.com",
-            "login.vk.com",
-            "vk.ru",
-            "www.vk.ru",
-            "id.vk.ru",
-            "login.vk.ru",
-        )
-
-        private val ALLOWED_ORIGIN_RULES = ALLOWED_HOSTS
-            .map { "https://$it" }
-            .toSet()
+        private val ALLOWED_ORIGIN_RULES = VkChallengeUrlPolicy.originRules
 
         /**
          * Observe the VK challenge response without changing the request,
