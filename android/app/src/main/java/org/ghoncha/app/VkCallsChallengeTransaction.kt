@@ -4,9 +4,10 @@ package org.ghoncha.app
  * One in-memory VK Calls challenge transaction.
  *
  * It binds the original HTTPS operation to exactly one interactive challenge
- * response. It deliberately does not encode undocumented VK retry parameters:
- * the provider adapter must validate the live protocol schema before building
- * the retry request.
+ * response. The retry form follows the currently observed VK API CAPTCHA
+ * contract (captcha_sid, empty captcha_key, is_sound_captcha, success_token,
+ * captcha_ts, captcha_attempt). VK does not publish a stable Calls backend
+ * contract, so this adapter remains isolated from the generic transport API.
  */
 internal class VkCallsChallengeTransaction(
     val challengeId: Long,
@@ -82,6 +83,64 @@ internal class VkCallsChallengeSubmission(
     val response: String,
 ) {
     private val retainedBody = originalBody.copyOf()
+    private var retryAttempted = false
+
     val originalBody: ByteArray
         get() = retainedBody.copyOf()
+
+    /**
+     * Resends the exact original form operation with VK's observed challenge
+     * fields. A submission is one-shot even if the network call fails; obtain a
+     * fresh server challenge before another attempt.
+     */
+    @Synchronized
+    fun retry(session: VkCallsHttpsSession): VkCallsHttpResponse {
+        check(!retryAttempted) { "VK challenge submission was already sent" }
+        retryAttempted = true
+        return session.postForm(originalUrl, buildRetryBody())
+    }
+
+    /** Encodes the VK challenge response into the original form body. */
+    fun buildRetryBody(): ByteArray {
+        val body = retainedBody.toString(Charsets.UTF_8)
+        require(body.isNotBlank()) { "Original VK form body is empty" }
+
+        val reserved = setOf(
+            "captcha_key",
+            "captcha_sid",
+            "is_sound_captcha",
+            "success_token",
+            "captcha_ts",
+            "captcha_attempt",
+        )
+        val existing = body.split('&').asSequence()
+            .map { it.substringBefore('=') }
+            .map { URLDecoder.decode(it, Charsets.UTF_8.name()) }
+            .toSet()
+        require(existing.intersect(reserved).isEmpty()) {
+            "Original VK request already contains CAPTCHA response fields"
+        }
+
+        val fields = listOf(
+            "captcha_key" to "",
+            "captcha_sid" to captchaSid,
+            "is_sound_captcha" to "0",
+            "success_token" to response,
+            "captcha_ts" to captchaTs.orEmpty(),
+            "captcha_attempt" to captchaAttempt?.takeIf { it.isNotBlank() } ?: "1",
+        )
+        val suffix = fields.joinToString("&") { (key, value) ->
+            "${URLEncoder.encode(key, Charsets.UTF_8.name())}=${URLEncoder.encode(value, Charsets.UTF_8.name())}"
+        }
+        val separator = if (body.endsWith('&')) "" else "&"
+        val result = (body + separator + suffix).toByteArray(Charsets.UTF_8)
+        require(result.size <= MAX_REQUEST_BYTES) {
+            "VK challenge retry body exceeds the configured size limit"
+        }
+        return result
+    }
+
+    private companion object {
+        const val MAX_REQUEST_BYTES = 1 shl 20
+    }
 }
