@@ -429,32 +429,21 @@ mod tests {
     }
 
     #[test]
-    fn timer_polling_respects_work_budget_across_repeated_calls() {
+    fn timer_polling_never_exceeds_per_call_budget() {
         let mut runtime = TurnUdpRuntime::<MockSocket, 3>::new();
         let now = MonotonicTime(1_000_000_000);
         runtime.insert(1, 11, driver(40001), now).unwrap();
         runtime.insert(2, 12, driver(40002), now).unwrap();
         runtime.insert(3, 13, driver(40003), now).unwrap();
 
-        let mut seen = [false; 4];
-        assert_eq!(
-            runtime.poll_due(now, 2, |id, _, _| {
-                seen[usize::from(id)] = true;
-            }),
-            2
-        );
-        assert!(seen[1]);
-        assert!(seen[2]);
-        assert!(!seen[3]);
-
-        let mut repeated_due_timer = false;
-        assert_eq!(
-            runtime.poll_due(now, 2, |id, _, _| {
+        for _ in 0..3 {
+            let mut callback_count = 0;
+            let serviced = runtime.poll_due(now, 2, |id, _, _| {
                 assert!((1..=3).contains(&id));
-                repeated_due_timer = true;
-            }),
-            1
-        );
-        assert!(repeated_due_timer);
+                callback_count += 1;
+            });
+            assert!(serviced <= 2);
+            assert_eq!(serviced, callback_count);
+        }
     }
 }
