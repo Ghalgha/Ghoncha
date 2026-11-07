@@ -185,6 +185,7 @@ version = "0.1.0"
 name = "ghoncha-platform-android"
 version = "0.1.0"
 dependencies = [
+ "ghoncha-transport-turn",
  "jni",
  "rustls",
  "rustls-platform-verifier",

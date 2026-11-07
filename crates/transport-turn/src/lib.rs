@@ -812,6 +812,11 @@ pub struct TurnUdpIoProgress {
 #[derive(Debug)]
 pub struct TurnUdpControlPoll {
     pub protocol: TurnPollRet,
+    /// Absolute monotonic deadline for the next protocol timer, if any.
+    ///
+    /// Platform reactors should schedule this directly and avoid periodic
+    /// polling. Socket readiness may wake the driver earlier.
+    pub next_deadline: Option<MonotonicTime>,
     pub queued_control: bool,
     pub queue_blocked: bool,
 }
@@ -894,6 +899,12 @@ impl<
     ) -> Result<TurnUdpControlPoll, TurnUdpDriverError> {
         self.ensure_active()?;
         let protocol = self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
+        let next_deadline = match &protocol {
+            TurnPollRet::WaitUntil(deadline) => Some(monotonic_deadline(*deadline)),
+            TurnPollRet::AllocateTcpSocket { .. }
+            | TurnPollRet::TcpClose { .. }
+            | TurnPollRet::Closed => None,
+        };
 
         match self.queues.ensure_control_capacity(MAX_DATAGRAM) {
             Ok(()) => {}
@@ -901,6 +912,7 @@ impl<
             | Err(DatagramQueueError::ByteCapacityReached { .. }) => {
                 return Ok(TurnUdpControlPoll {
                     protocol,
+                    next_deadline,
                     queued_control: false,
                     queue_blocked: true,
                 });
@@ -915,6 +927,7 @@ impl<
         else {
             return Ok(TurnUdpControlPoll {
                 protocol,
+                next_deadline,
                 queued_control: false,
                 queue_blocked: false,
             });
@@ -924,6 +937,7 @@ impl<
             .map_err(TurnUdpDriverError::Queue)?;
         Ok(TurnUdpControlPoll {
             protocol,
+            next_deadline,
             queued_control: true,
             queue_blocked: false,
         })
@@ -1209,6 +1223,10 @@ impl TurnDatagramSocket for std::net::UdpSocket {
     }
 }
 
+fn monotonic_deadline(deadline: Instant) -> MonotonicTime {
+    MonotonicTime(deadline.as_nanos().max(0) as u64)
+}
+
 fn to_instant(now: MonotonicTime) -> Result<Instant, TurnError> {
     let nanos = i64::try_from(now.0).map_err(|_| TurnError::TimeOutOfRange)?;
     Ok(Instant::from_nanos(nanos))
@@ -1220,6 +1238,18 @@ mod tests {
 
     fn destination() -> SocketAddr {
         "198.51.100.1:3478".parse().unwrap()
+    }
+
+    #[test]
+    fn protocol_deadline_conversion_preserves_nonnegative_monotonic_nanoseconds() {
+        assert_eq!(
+            monotonic_deadline(Instant::from_nanos(1_234_567_890)),
+            MonotonicTime(1_234_567_890)
+        );
+        assert_eq!(
+            monotonic_deadline(Instant::from_nanos(-1)),
+            MonotonicTime(0)
+        );
     }
 
     #[test]
@@ -1736,6 +1766,25 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
         }
     }
 
+    /// Computes a bounded wait for the platform readiness poller.
+    ///
+    /// Ready work returns zero; an armed timer shortens the caller's maximum
+    /// wait; an idle reactor uses that maximum. Re-read the monotonic clock
+    /// after the OS wait before servicing timers.
+    pub fn wait_duration(
+        &self,
+        now: MonotonicTime,
+        max_wait: core::time::Duration,
+    ) -> core::time::Duration {
+        match self.next_wakeup_at(now) {
+            TurnReactorWakeup::Ready => core::time::Duration::ZERO,
+            TurnReactorWakeup::Deadline(deadline) => {
+                core::time::Duration::from_nanos(deadline.0.saturating_sub(now.0)).min(max_wait)
+            }
+            TurnReactorWakeup::Idle => max_wait,
+        }
+    }
+
     /// Returns the earliest absolute monotonic deadline, if any.
     pub fn next_deadline(&self) -> Option<MonotonicTime> {
         self.slots
@@ -1836,6 +1885,41 @@ mod reactor_tests {
         assert_eq!(
             reactor.next_wakeup_at(MonotonicTime(101)),
             TurnReactorWakeup::Idle
+        );
+    }
+
+    #[test]
+    fn reactor_wait_duration_is_bounded_by_ready_work_and_deadlines() {
+        let mut reactor = TurnUdpReactor::<2>::new();
+        let max_wait = core::time::Duration::from_secs(5);
+
+        assert_eq!(reactor.wait_duration(MonotonicTime(10), max_wait), max_wait);
+
+        reactor.register(1).unwrap();
+        reactor.schedule(1, MonotonicTime(2_000_000_010)).unwrap();
+        assert_eq!(
+            reactor.wait_duration(MonotonicTime(10), max_wait),
+            core::time::Duration::from_secs(2)
+        );
+        assert_eq!(
+            reactor.wait_duration(
+                MonotonicTime(1_500_000_010),
+                core::time::Duration::from_secs(10)
+            ),
+            core::time::Duration::from_millis(500)
+        );
+        assert_eq!(
+            reactor.wait_duration(
+                MonotonicTime(2_000_000_010),
+                core::time::Duration::from_secs(10)
+            ),
+            core::time::Duration::ZERO
+        );
+
+        reactor.wake(1).unwrap();
+        assert_eq!(
+            reactor.wait_duration(MonotonicTime(10), max_wait),
+            core::time::Duration::ZERO
         );
     }
 

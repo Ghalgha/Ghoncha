@@ -12,3 +12,4 @@ crate-type = ["cdylib"]
 jni = "=0.22.4"
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-platform-verifier = "=0.7.1"
+ghoncha-transport-turn = { path = "../transport-turn", features = ["std"] }
