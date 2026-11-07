@@ -126,12 +126,12 @@ Implemented:
 - bounded ciphertext input, pending output and plaintext write sizes;
 - `TlsStreamSocket<S>` adapter that wraps an already-connected TURN TCP socket;
 - integration with the existing `TurnTcpDriver` through `TurnStreamSocket`;
-- tests for ClientHello generation, partial TLS output draining, handshake gating, oversized input, early-data rejection, partial socket writes, and TURN driver plaintext isolation;
+- tests for ClientHello generation, a verified client/server handshake, bidirectional TURN stream records, untrusted-CA and hostname-mismatch rejection, partial TLS output draining, handshake gating, oversized input, early-data rejection, partial socket writes, and TURN driver plaintext isolation;
 - CI formatting, Clippy and tests with all Cargo features enabled.
 
 Not implemented or not yet validated:
-- complete successful client/server TLS handshake test with a local certificate authority;
-- valid, expired, untrusted and hostname-mismatched certificate integration tests;
+- expired-certificate validation test;
+- live TLS-enabled TURN server interoperability and end-to-end gateway validation;
 - `rustls-platform-verifier` dependency and platform trust-store integration;
 - Android Kotlin/Gradle/JNI initialization and Android instrumentation tests;
 - iOS and Windows trust-store integration;
