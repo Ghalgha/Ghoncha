@@ -180,12 +180,6 @@ mod android {
         Ok(AndroidUdpSocket { socket, local_addr })
     }
 
-    /// A non-blocking protected UDP socket adopted by the Rust TURN driver.
-    pub struct AndroidUdpSocket {
-        socket: UdpSocket,
-        local_addr: SocketAddr,
-    }
-
     impl AndroidUdpSocket {
         /// Returns the raw descriptor for readiness registration only.
         /// The caller must not read, write, close, or take ownership of it.
