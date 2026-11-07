@@ -20,7 +20,6 @@ jobs:
       - name: Resolve dependencies and emit lockfile
         run: |
           cargo +1.99.1 generate-lockfile
-          echo "LOCKFILE_BASE64_BEGIN"
-          base64 -w0 Cargo.lock
-          echo
-          echo "LOCKFILE_BASE64_END"
+          echo "LOCKFILE_TOML_BEGIN"
+          cat Cargo.lock
+          echo "LOCKFILE_TOML_END"
