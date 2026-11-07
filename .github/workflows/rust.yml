@@ -81,3 +81,4 @@ jobs:
         run: gradle --no-daemon -p android assembleDebug
         env:
           ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/28.2.13676358
+          ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/28.2.13676358
