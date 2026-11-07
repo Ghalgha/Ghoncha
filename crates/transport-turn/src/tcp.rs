@@ -956,6 +956,9 @@ mod driver_tests {
         writes: Vec<u8>,
         write_limit: usize,
         would_block: bool,
+        read_data: Vec<u8>,
+        read_closed: bool,
+        read_would_block: bool,
     }
 
     impl TurnStreamSocket for MockStream {
@@ -967,8 +970,21 @@ mod driver_tests {
             self.peer
         }
 
-        fn read(&mut self, _buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
-            Err(TurnStreamIoError::WouldBlock)
+        fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
+            if self.read_would_block {
+                return Err(TurnStreamIoError::WouldBlock);
+            }
+            if self.read_data.is_empty() {
+                return if self.read_closed {
+                    Ok(0)
+                } else {
+                    Err(TurnStreamIoError::WouldBlock)
+                };
+            }
+            let read = buffer.len().min(self.read_data.len());
+            buffer[..read].copy_from_slice(&self.read_data[..read]);
+            self.read_data.drain(..read);
+            Ok(read)
         }
 
         fn write(&mut self, bytes: &[u8]) -> Result<usize, TurnStreamIoError> {
@@ -988,6 +1004,9 @@ mod driver_tests {
             writes: Vec::new(),
             write_limit: 2,
             would_block: false,
+            read_data: Vec::new(),
+            read_closed: false,
+            read_would_block: true,
         }
     }
 
@@ -1070,6 +1089,63 @@ mod driver_tests {
         );
         assert_eq!(driver.socket.writes, &[1, 2, 3, 4, 5]);
         assert_eq!(driver.queued_frames(), 0);
+    }
+
+    #[test]
+    fn driver_requires_parser_buffer_to_be_drained_before_another_socket_read() {
+        let mut socket = mock_stream();
+        socket.read_would_block = false;
+        socket.read_data = alloc::vec![0x00, 0x01];
+        let mut driver = TurnTcpDriver::<MockStream, 2, 16, 32>::new(
+            socket,
+            "198.51.100.1:3478".parse().unwrap(),
+            "test-user",
+            "test-password",
+        )
+        .unwrap();
+
+        let mut buffer = [0u8; 32];
+        assert!(matches!(
+            driver.receive_one(&mut buffer, MonotonicTime(1)).unwrap(),
+            TurnTcpDriverReceive::Data(TurnReceiveResult::Handled)
+        ));
+        assert!(matches!(
+            driver.receive_one(&mut buffer, MonotonicTime(2)),
+            Err(TurnTcpDriverError::Turn(TurnTcpError::BufferedDataPending))
+        ));
+        assert!(driver.poll_peer_data(MonotonicTime(2)).unwrap().is_none());
+        assert_eq!(
+            driver.receive_one(&mut buffer, MonotonicTime(3)).unwrap(),
+            TurnTcpDriverReceive::WouldBlock
+        );
+    }
+
+    #[test]
+    fn driver_retires_on_stream_eof_and_rejects_future_io() {
+        let mut socket = mock_stream();
+        socket.read_would_block = false;
+        socket.read_closed = true;
+        let mut driver = TurnTcpDriver::<MockStream, 2, 16, 32>::new(
+            socket,
+            "198.51.100.1:3478".parse().unwrap(),
+            "test-user",
+            "test-password",
+        )
+        .unwrap();
+
+        let mut buffer = [0u8; 32];
+        assert!(matches!(
+            driver.receive_one(&mut buffer, MonotonicTime(1)).unwrap(),
+            TurnTcpDriverReceive::Closed
+        ));
+        assert!(matches!(
+            driver.flush_one(),
+            Err(TurnTcpDriverError::Retired)
+        ));
+        assert!(matches!(
+            driver.poll_control_with_deadline(MonotonicTime(2)),
+            Err(TurnTcpDriverError::Retired)
+        ));
     }
 
     #[test]
