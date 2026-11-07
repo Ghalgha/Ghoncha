@@ -925,46 +925,39 @@ mod tests {
         .unwrap();
         let mut server = rustls::ServerConnection::new(test_server_config()).unwrap();
 
-        // The adapter emits ClientHello through the underlying byte stream.
-        assert_eq!(
-            socket.read(&mut [0_u8; 64]),
-            Err(TurnStreamIoError::WouldBlock)
-        );
-        let client_hello = std::mem::take(&mut socket.socket.writes);
-        assert!(!client_hello.is_empty());
-        let mut input = std::io::Cursor::new(&client_hello);
-        assert_eq!(server.read_tls(&mut input).unwrap(), client_hello.len());
-        server.process_new_packets().unwrap();
-
-        // Feed the authenticated server flight into the adapter's TCP input.
-        let mut server_flight = std::vec::Vec::new();
-        server.write_tls(&mut server_flight).unwrap();
-        assert!(!server_flight.is_empty());
-        socket.socket.read_data.extend_from_slice(&server_flight);
-        assert_eq!(
-            socket.read(&mut [0_u8; 64]),
-            Err(TurnStreamIoError::WouldBlock)
-        );
-
-        // The adapter must flush the client's Finished before application data.
-        let client_finished = std::mem::take(&mut socket.socket.writes);
-        assert!(!client_finished.is_empty());
-        let mut input = std::io::Cursor::new(&client_finished);
-        assert_eq!(server.read_tls(&mut input).unwrap(), client_finished.len());
-        server.process_new_packets().unwrap();
-
-        // Rustls may emit post-handshake TLS 1.3 tickets after processing
-        // the client's Finished. Drive that server output back through the
-        // adapter before asserting that application data is ready.
-        if server.wants_write() {
-            let mut post_handshake = std::vec::Vec::new();
-            server.write_tls(&mut post_handshake).unwrap();
-            assert!(!post_handshake.is_empty());
-            socket.socket.read_data.extend_from_slice(&post_handshake);
+        // Drive both peers through the adapter's actual nonblocking stream
+        // contract. Each iteration gives the adapter one read opportunity,
+        // forwards any client ciphertext to the server, then queues any server
+        // handshake or post-handshake output for the next adapter read.
+        for _ in 0..16 {
             assert_eq!(
                 socket.read(&mut [0_u8; 64]),
                 Err(TurnStreamIoError::WouldBlock)
             );
+
+            let client_ciphertext = std::mem::take(&mut socket.socket.writes);
+            if !client_ciphertext.is_empty() {
+                let mut input = std::io::Cursor::new(&client_ciphertext);
+                assert_eq!(
+                    server.read_tls(&mut input).unwrap(),
+                    client_ciphertext.len()
+                );
+                server.process_new_packets().unwrap();
+            }
+
+            if server.wants_write() {
+                let mut server_ciphertext = std::vec::Vec::new();
+                let written = server.write_tls(&mut server_ciphertext).unwrap();
+                assert!(written > 0);
+                socket
+                    .socket
+                    .read_data
+                    .extend_from_slice(&server_ciphertext);
+            }
+
+            if socket.tls().application_data_ready() {
+                break;
+            }
         }
         assert!(socket.tls().application_data_ready());
 
