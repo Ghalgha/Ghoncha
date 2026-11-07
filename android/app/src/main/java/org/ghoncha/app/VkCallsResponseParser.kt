@@ -3,6 +3,7 @@ package org.ghoncha.app
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
+import java.math.BigDecimal
 
 /**
  * Strict decoder for observed VK Calls response envelopes.
@@ -74,7 +75,9 @@ internal object VkCallsResponseParser {
         val value = json.opt(key)
         return when (value) {
             is String -> value.takeIf { it.isNotBlank() }
-            is Number -> value.toString()
+            is Number -> runCatching {
+                BigDecimal(value.toString()).stripTrailingZeros().toPlainString()
+            }.getOrNull()
             else -> null
         }
     }
