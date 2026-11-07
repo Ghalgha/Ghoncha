@@ -35,7 +35,7 @@ The current `UnderlayDatagramSocketFactory` takes a network-scoped DNS resolver,
 
 ## Rust boundary
 
-The Android adapter should call `take_udp_socket(handle)` once to move the `OwnedFd` out of the JNI registry, then wrap it in a platform socket type and register it with the reactor. After this call, Kotlin must not close the handle; Rust owns the descriptor and must close it exactly once when the driver stops. Packet payloads must not cross FFI one packet at a time.
+The native crate now provides `take_android_udp_socket(handle)`: it consumes the JNI registry entry, converts the `OwnedFd` into `std::net::UdpSocket`, enforces non-blocking mode, and implements `TurnDatagramSocket`. The returned `AndroidUdpSocket` can be passed directly to `TurnUdpDriver::new`. Dropping the socket closes the native descriptor. The caller must not close the Kotlin handle after Rust consumes it. Registration with a real OS readiness reactor and the JNI entry point that hands a handle to a live TURN driver remain future work. Packet payloads must not cross FFI one packet at a time.
 
 The current `TurnUdpDriver` does not create Android sockets, call `protect()`, bind a `Network`, register readiness events, or perform Android lifecycle callbacks. These remain unimplemented integration work.
 
