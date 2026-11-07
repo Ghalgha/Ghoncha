@@ -6,6 +6,9 @@
 //! TURN implementation, cryptographic implementation, or packet parser.
 //! Adapters exchange opaque authenticated tunnel records with the caller.
 
+mod challenge;
+pub use challenge::*;
+
 mod credentials;
 pub use credentials::*;
 
