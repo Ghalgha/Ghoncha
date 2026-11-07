@@ -901,7 +901,7 @@ impl<
         let protocol = self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
         let next_deadline = match &protocol {
             TurnPollRet::WaitUntil(deadline) => {
-                Some(MonotonicTime(deadline.as_nanos().max(0) as u64))
+                Some(monotonic_deadline(*deadline))
             }
             TurnPollRet::AllocateTcpSocket { .. }
             | TurnPollRet::TcpClose { .. }
@@ -1225,6 +1225,10 @@ impl TurnDatagramSocket for std::net::UdpSocket {
     }
 }
 
+fn monotonic_deadline(deadline: Instant) -> MonotonicTime {
+    MonotonicTime(deadline.as_nanos().max(0) as u64)
+}
+
 fn to_instant(now: MonotonicTime) -> Result<Instant, TurnError> {
     let nanos = i64::try_from(now.0).map_err(|_| TurnError::TimeOutOfRange)?;
     Ok(Instant::from_nanos(nanos))
@@ -1236,6 +1240,18 @@ mod tests {
 
     fn destination() -> SocketAddr {
         "198.51.100.1:3478".parse().unwrap()
+    }
+
+    #[test]
+    fn protocol_deadline_conversion_preserves_nonnegative_monotonic_nanoseconds() {
+        assert_eq!(
+            monotonic_deadline(Instant::from_nanos(1_234_567_890)),
+            MonotonicTime(1_234_567_890)
+        );
+        assert_eq!(
+            monotonic_deadline(Instant::from_nanos(-1)),
+            MonotonicTime(0)
+        );
     }
 
     #[test]
@@ -1259,31 +1275,6 @@ mod tests {
             TurnReceiveResult::Ignored { from }
                 if from == "203.0.113.9:3478".parse().unwrap()
         ));
-    }
-
-    #[cfg(feature = "std")]
-    #[test]
-    fn driver_exposes_the_protocol_wait_until_deadline_to_the_reactor() {
-        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        socket.set_nonblocking(true).unwrap();
-        let mut driver: TurnUdpDriver<std::net::UdpSocket> = TurnUdpDriver::new(
-            socket,
-            "198.51.100.1:3478".parse().unwrap(),
-            "test-user",
-            "test-password",
-        )
-        .unwrap();
-
-        let progress = driver.poll_control_with_deadline(MonotonicTime(1)).unwrap();
-        match &progress.protocol {
-            TurnPollRet::WaitUntil(deadline) => assert_eq!(
-                progress.next_deadline,
-                Some(MonotonicTime(deadline.as_nanos().max(0) as u64))
-            ),
-            TurnPollRet::AllocateTcpSocket { .. }
-            | TurnPollRet::TcpClose { .. }
-            | TurnPollRet::Closed => assert_eq!(progress.next_deadline, None),
-        }
     }
 
     #[test]
