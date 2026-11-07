@@ -339,6 +339,9 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
     /// caller drives the TURN Delete transaction through engine_mut(). Call
     /// take_drained only after Delete succeeds or reaches a terminal failure.
     pub fn begin_deallocation(&mut self, id: u16) -> Result<(), AllocationManagerError> {
+        if self.flow_dispatcher.assigned_flows(id) != 0 {
+            return Err(AllocationManagerError::ActiveFlowsRemain);
+        }
         let slot = self
             .get_mut(id)
             .ok_or(AllocationManagerError::UnknownAllocation)?;
@@ -350,9 +353,6 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         }
         if slot.load.in_flight_packets != 0 || slot.load.queued_bytes != 0 {
             return Err(AllocationManagerError::PendingWorkRemains);
-        }
-        if self.flow_dispatcher.assigned_flows(id) != 0 {
-            return Err(AllocationManagerError::ActiveFlowsRemain);
         }
         slot.deallocation_confirmed = false;
         slot.socket_closed_after_deallocation_failure = false;
