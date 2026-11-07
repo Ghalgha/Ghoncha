@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">GHONCHA</string>
+    <string name="app_name">Ghoncha</string>
     <string name="vpn_notification_channel">VPN status</string>
     <string name="vpn_tun_not_forwarding">Local TUN allocated; no routes or packet forwarding are active.</string>
     <string name="vpn_tun_test_description">TUN lifecycle test only. This does not route or forward device traffic.</string>
