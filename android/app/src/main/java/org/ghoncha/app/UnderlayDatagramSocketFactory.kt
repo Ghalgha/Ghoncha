@@ -1,5 +1,6 @@
 package org.ghoncha.app
 
+import android.os.ParcelFileDescriptor
 import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.Inet6Address
@@ -23,6 +24,44 @@ internal data class PreparedUnderlayDatagramSocket(
 ) {
     val socket: DatagramSocket
         get() = channel.socket()
+
+    /**
+     * Duplicates the prepared socket into Rust ownership and closes the Java
+     * channel only after native adoption succeeds. ParcelFileDescriptor.dup()
+     * is required for Android releases before API 29, where
+     * fromDatagramSocket() may otherwise retain the original FileDescriptor.
+     */
+    fun transferToNative(): NativeUdpSocketHandle {
+        check(channel.isOpen) { "UDP channel is already closed" }
+
+        val initialDescriptor = ParcelFileDescriptor.fromDatagramSocket(socket)
+        val stableDescriptor = try {
+            initialDescriptor.dup()
+        } finally {
+            initialDescriptor.close()
+        }
+
+        val nativeHandle = try {
+            NativeBootstrap.adoptUdpSocket(stableDescriptor.fd)
+        } finally {
+            stableDescriptor.close()
+        }
+        check(nativeHandle > 0) { "Native layer rejected the UDP socket descriptor" }
+
+        val owner = NativeUdpSocketHandle(
+            nativeHandle = nativeHandle,
+            serverAddress = serverAddress,
+            localAddress = localAddress,
+            networkGeneration = networkGeneration,
+        )
+        try {
+            channel.close()
+        } catch (failure: Throwable) {
+            owner.close()
+            throw failure
+        }
+        return owner
+    }
 }
 
 /**
