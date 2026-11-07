@@ -9,7 +9,7 @@ mod android {
     use std::net::{SocketAddr, UdpSocket};
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::raw::c_int;
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::{Mutex, OnceLock};
 
     use ghoncha_transport_turn::{DatagramReceive, DatagramSocketError, TurnDatagramSocket};
@@ -20,7 +20,7 @@ mod android {
 
     static ANDROID_VERIFIER_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static NEXT_SOCKET_HANDLE: AtomicU32 = AtomicU32::new(1);
-    static NEXT_TUN_HANDLE: AtomicU64 = AtomicU64::new(1);
+    static NEXT_TUN_HANDLE: AtomicU32 = AtomicU32::new(1);
     static UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, OwnedFd>>> = OnceLock::new();
     static TUN_INTERFACES: OnceLock<Mutex<HashMap<i64, OwnedFd>>> = OnceLock::new();
     static ADOPTED_UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, AndroidUdpSocket>>> = OnceLock::new();
@@ -115,10 +115,10 @@ mod android {
 
         let raw_handle = NEXT_TUN_HANDLE
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                (next <= i64::MAX as u64).then(|| next + 1)
+                next.checked_add(1)
             })
             .ok()?;
-        let handle = i64::try_from(raw_handle).ok()?;
+        let handle = i64::from(raw_handle);
         let mut interfaces = tun_interface_table().lock().ok()?;
         if interfaces.contains_key(&handle) {
             return None;
