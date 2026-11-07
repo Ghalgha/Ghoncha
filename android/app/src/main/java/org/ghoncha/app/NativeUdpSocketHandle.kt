@@ -29,6 +29,9 @@ internal class NativeUdpSocketHandle internal constructor(
     fun transferToRust(): Long {
         val value = handle.getAndSet(0)
         check(value > 0) { "Native UDP handle was already transferred or closed" }
+        check(NativeBootstrap.consumeUdpSocket(value)) {
+            "Native layer could not consume the prepared UDP socket"
+        }
         return value
     }
 
