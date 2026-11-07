@@ -47,9 +47,9 @@ internal class NativeTunInterfaceHandle internal constructor(
             val handle = try {
                 NativeBootstrap.adoptTunInterface(detachedFd)
             } catch (failure: Throwable) {
-                // JNI did not accept ownership if the native call itself could
-                // not be entered (for example, a missing symbol).
-                android.system.Os.close(detachedFd)
+                // If JNI could not be entered (for example, a missing symbol),
+                // restore an owning Android wrapper so the detached fd is closed.
+                runCatching { ParcelFileDescriptor.adoptFd(detachedFd).close() }
                 throw failure
             }
             check(handle > 0) { "Native layer rejected the TUN descriptor" }
