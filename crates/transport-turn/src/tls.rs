@@ -997,6 +997,35 @@ mod tests {
     }
 
     #[test]
+    fn tls_socket_preserves_client_hello_across_partial_tcp_writes() {
+        let mut socket =
+            TlsStreamSocket::new(mock_stream(7), client_config(), server_name()).unwrap();
+
+        assert_eq!(
+            socket.write(b"TURN Allocate"),
+            Err(TurnStreamIoError::WouldBlock)
+        );
+
+        assert!(!socket.flush_pending_ciphertext().unwrap());
+        let mut flushes = 1;
+        while !socket.flush_pending_ciphertext().unwrap() {
+            flushes += 1;
+            assert!(flushes < 1024, "partial TLS output did not drain");
+        }
+
+        assert!(flushes > 1);
+        assert!(!socket.socket().writes.is_empty());
+        assert!(
+            !socket
+                .socket()
+                .writes
+                .windows(b"TURN Allocate".len())
+                .any(|part| part == b"TURN Allocate")
+        );
+        assert!(socket.tls().is_handshaking());
+    }
+
+    #[test]
     fn tls_socket_sends_client_hello_before_accepting_turn_plaintext() {
         let mut socket =
             TlsStreamSocket::new(mock_stream(usize::MAX), client_config(), server_name()).unwrap();
