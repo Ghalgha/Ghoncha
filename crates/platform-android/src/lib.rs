@@ -24,9 +24,8 @@ mod android {
         _class: JClass<'caller>,
         context: JObject<'caller>,
     ) {
-        let result = unowned_env.with_env(|env| {
-            rustls_platform_verifier::android::init_with_env(env, context)
-        });
+        let result = unowned_env
+            .with_env(|env| rustls_platform_verifier::android::init_with_env(env, context));
         if result.is_ok() {
             ANDROID_VERIFIER_INITIALIZED.store(true, Ordering::Release);
         }
