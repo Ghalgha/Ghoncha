@@ -1765,8 +1765,7 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
         match self.next_wakeup_at(now) {
             TurnReactorWakeup::Ready => core::time::Duration::ZERO,
             TurnReactorWakeup::Deadline(deadline) => {
-                core::time::Duration::from_nanos(deadline.0.saturating_sub(now.0))
-                    .min(max_wait)
+                core::time::Duration::from_nanos(deadline.0.saturating_sub(now.0)).min(max_wait)
             }
             TurnReactorWakeup::Idle => max_wait,
         }
@@ -1880,10 +1879,7 @@ mod reactor_tests {
         let mut reactor = TurnUdpReactor::<2>::new();
         let max_wait = core::time::Duration::from_secs(5);
 
-        assert_eq!(
-            reactor.wait_duration(MonotonicTime(10), max_wait),
-            max_wait
-        );
+        assert_eq!(reactor.wait_duration(MonotonicTime(10), max_wait), max_wait);
 
         reactor.register(1).unwrap();
         reactor.schedule(1, MonotonicTime(2_000_000_010)).unwrap();
