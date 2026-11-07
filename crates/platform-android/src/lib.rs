@@ -21,8 +21,7 @@ mod android {
     static ANDROID_VERIFIER_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static NEXT_SOCKET_HANDLE: AtomicU32 = AtomicU32::new(1);
     static UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, OwnedFd>>> = OnceLock::new();
-    static ADOPTED_UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, AndroidUdpSocket>>> =
-        OnceLock::new();
+    static ADOPTED_UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, AndroidUdpSocket>>> = OnceLock::new();
 
     const F_GETFD: c_int = 1;
     const F_SETFD: c_int = 2;
@@ -571,7 +570,11 @@ mod android {
     /// Closes a socket consumed by Rust but not yet attached to a TURN driver.
     #[jni_mangle("org.ghoncha.app.NativeBootstrap")]
     #[allow(non_snake_case)]
-    pub fn closeAdoptedUdpSocket(_unowned_env: EnvUnowned<'_>, _class: JClass<'_>, handle: i64) -> bool {
+    pub fn closeAdoptedUdpSocket(
+        _unowned_env: EnvUnowned<'_>,
+        _class: JClass<'_>,
+        handle: i64,
+    ) -> bool {
         close_adopted_udp_socket(handle)
     }
 
@@ -597,6 +600,6 @@ mod android {
 #[cfg(target_os = "android")]
 pub use android::{
     AndroidPollEvent, AndroidPollerError, AndroidSocketAdoptionError, AndroidUdpPoller,
-    AndroidUdpSocket, platform_tls_client_config, take_adopted_udp_socket,
-    take_android_udp_socket, take_udp_socket,
+    AndroidUdpSocket, platform_tls_client_config, take_adopted_udp_socket, take_android_udp_socket,
+    take_udp_socket,
 };
