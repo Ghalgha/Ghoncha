@@ -2,6 +2,15 @@
 
 Status: architecture baseline for an experimental, user-authorized transport. This document supersedes the earlier WebRTC DataChannel framing. The primary mechanism studied in the supplied reference projects is VK Calls TURN relay, not a generic VK Calls DataChannel.
 
+
+### Android challenge WebView
+
+The Android client provides a non-exported `VkChallengeWebViewActivity` for an explicitly supplied VK HTTPS challenge URL. It uses the platform WebView with its normal Android WebView user agent and browser properties; GHONCHA does not randomize or spoof the fingerprint. JavaScript and DOM storage are enabled because interactive challenge pages require them; file/content access and mixed-content access are not enabled. Top-level navigation is restricted to the VK login/calls host allowlist.
+
+The WebView owns its cookie jar through Android `CookieManager`; cookies are flushed when the user returns from the challenge. Cookies are not copied into logs, intents, or native HTTP clients. The activity's `RESULT_OK` means only that the user pressed the completion control. It is **not** proof that VK accepted the challenge. The credential provider must verify acceptance through the originating VK session before advancing authorization or publishing new TURN credentials.
+
+Current integration boundary: this activity is a UI component and intent factory, not yet wired to a VK credential provider. Native HTTP/WebView session sharing is not implemented. Do not assume cookies from this WebView are available to a separate Rust or native HTTP client. A future provider must either keep the relevant challenge/API interaction within this WebView session or implement an explicit, narrowly scoped session bridge with secret handling and tests.
+
 ## 1. Correct transport model
 
 The reference implementations use VK Calls as a source of TURN relay service and short-lived TURN credentials. They do not generally tunnel IP packets through the public VK Calls JavaScript SDK's DataChannel API.
