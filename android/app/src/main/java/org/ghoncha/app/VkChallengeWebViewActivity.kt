@@ -1,6 +1,8 @@
 package org.ghoncha.app
 
 import android.app.Activity
+import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
@@ -88,7 +90,11 @@ class VkChallengeWebViewActivity : Activity() {
         webView.webChromeClient = WebChromeClient()
         root.addView(
             webView,
-            LinearLayout.LayoutParams(0, 0, 1f),
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f,
+            ),
         )
 
         val actions = LinearLayout(this).apply {
@@ -145,6 +151,10 @@ class VkChallengeWebViewActivity : Activity() {
     }
 
     companion object {
+        fun createIntent(context: Context, challengeUrl: String): Intent =
+            Intent(context, VkChallengeWebViewActivity::class.java)
+                .putExtra(EXTRA_CHALLENGE_URL, challengeUrl)
+
         const val EXTRA_CHALLENGE_URL = "org.ghoncha.app.VK_CHALLENGE_URL"
 
         private val ALLOWED_HOSTS = setOf(
