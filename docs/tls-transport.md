@@ -1,6 +1,6 @@
 # TLS transport over TURN/TCP
 
-Status: partial implementation. Rustls 0.23.46 is pinned in `ghoncha-transport-turn`; `TlsClientEngine` and `TlsStreamSocket` provide a nonblocking TLS client stream that can be supplied to `TurnTcpDriver`. The complete TLS handshake, trust-store integration and TLS-enabled TURN server interoperability are not yet tested, so this is not production-ready TURN/TLS.
+Status: partial implementation, not production-ready. Rustls 0.23.46 is pinned in `ghoncha-transport-turn`. `TlsClientEngine` and `TlsStreamSocket` provide a nonblocking TLS client stream for `TurnTcpDriver`. A verified in-memory client/server handshake and negative certificate tests pass; platform trust-store integration, live TLS-enabled TURN interoperability and Android application integration remain unimplemented.
 
 ## 1. Scope and protocol layering
 
@@ -37,9 +37,9 @@ The endpoint name used for certificate verification must come from trusted endpo
 
 ## 3. Platform trust
 
-Use `rustls-platform-verifier` 0.7.1 as the current candidate for operating-system trust integration (review its release notes and compatibility again when pinning dependencies).
+Use `rustls-platform-verifier` 0.7.1 as the selected integration candidate, but do not add it to `ghoncha-transport-turn`: that crate is a portable transport implementation and must continue accepting a caller-supplied verified `ClientConfig`. The verifier belongs in the platform bootstrap/application layer. Version 0.7.1 (2026-09-24) changes Android distribution: its Kotlin component is delivered through the project's GitHub-hosted Maven repository, not a Cargo-bundled local Maven repository. The Gradle dependency version must be resolved from the `Cargo.lock` entry for `rustls-platform-verifier-android` to keep the native and Kotlin components aligned.
 
-- Android: initialize the verifier exactly once during native application startup, before any TLS verification can occur. Bundle the required Kotlin component and Gradle/Maven setup, preserve it through R8/ProGuard, and pass a valid Android Context through the documented JNI initialization entry point. Initialization failure must prevent TLS transport startup; there is no insecure fallback.
+- Android: the current repository has no Android app, Gradle project, Kotlin bootstrap, or JNI entry point, so this integration cannot yet be compiled or instrumented here. When that layer is added: configure the Maven repository `https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/`; declare the unversioned `rustls:rustls-platform-verifier` artifact and resolve its version from the Cargo.lock package `rustls-platform-verifier-android`; run the documented `cargo metadata` Gradle setup so Cargo locates the component; add `-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }` for R8/ProGuard; and call `rustls_platform_verifier::android::init_with_env` once from the application/native startup JNI entry point with the application Context, before any TLS verification. Treat initialization failure as fatal for TLS startup. Do not hand-roll a second Android certificate verifier or add the Android/JNI dependency to the portable TURN crate.
 - iOS/macOS: use the platform Security framework trust path exposed by the verifier crate; verify deployment-target and framework integration in the actual Apple build.
 - Windows: use the Windows platform certificate verifier exposed by the same crate.
 - Other targets: explicitly choose and document the system/web-PKI root strategy. Do not silently ship an empty root store.
@@ -61,7 +61,7 @@ The implemented engine drives Rustls explicitly and never calls `complete_io()`:
 6. `TlsStreamSocket` wraps an already-connected `TurnStreamSocket`, preserves partial ciphertext writes in a fixed 16 KiB output buffer, decrypts reads, and implements the same stream trait consumed by `TurnTcpDriver`.
 7. `TurnTcpDriver<TlsStreamSocket<S>>` keeps TURN framing and parser state above TLS. The driver retains TURN bytes when the TLS handshake is not ready; the underlay socket sees only ciphertext.
 
-The wrapper does not create, bind, protect or connect sockets. The platform must still prepare the raw socket and drive read/write readiness. Unexpected EOF, fatal TLS alerts and socket errors retire the stream. A complete successful handshake and close-notify behavior remain integration-test work.
+The wrapper does not create, bind, protect or connect sockets. The platform must still prepare the raw socket and drive read/write readiness. Unexpected EOF, fatal TLS alerts and socket errors retire the stream. The TLS engine has a verified in-memory handshake test; end-to-end handshake through the socket adapter and `TurnTcpDriver`, plus close-notify behavior, remain integration-test work.
 
 The API must expose whether the TLS engine wants socket read or write readiness and whether decrypted TURN bytes are waiting. A single read may produce multiple TLS records or partial TURN messages; bounded draining must handle both without losing data.
 
@@ -126,16 +126,16 @@ Implemented:
 - bounded ciphertext input, pending output and plaintext write sizes;
 - `TlsStreamSocket<S>` adapter that wraps an already-connected TURN TCP socket;
 - integration with the existing `TurnTcpDriver` through `TurnStreamSocket`;
-- tests for ClientHello generation, a verified client/server handshake, bidirectional TURN stream records, untrusted-CA and hostname-mismatch rejection, partial TLS output draining, handshake gating, oversized input, early-data rejection, partial socket writes, and TURN driver plaintext isolation;
+- tests for ClientHello generation, a verified in-memory client/server handshake, bidirectional TLS stream data, untrusted-CA and hostname-mismatch rejection, partial TLS output draining, handshake gating, oversized input, early-data rejection, partial socket writes, and TURN driver plaintext isolation;
 - CI formatting, Clippy and tests with all Cargo features enabled.
 
 Not implemented or not yet validated:
 - expired-certificate validation test;
 - live TLS-enabled TURN server interoperability and end-to-end gateway validation;
-- `rustls-platform-verifier` dependency and platform trust-store integration;
-- Android Kotlin/Gradle/JNI initialization and Android instrumentation tests;
+- `rustls-platform-verifier` dependency in the platform/application layer and platform trust-store integration;
+- Android app module, Kotlin/Gradle Maven integration, JNI initialization and Android instrumentation tests;
 - iOS and Windows trust-store integration;
-- TLS-enabled TURN server integration covering Allocate, Permission, ChannelBind and peer data;
+- full TLS-enabled TURN server integration covering Allocate, Permission, ChannelBind and peer data;
 - network handover, session resumption policy and production transport selection;
 - device-level throughput, latency, memory, thermal and battery benchmarks.
 
