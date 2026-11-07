@@ -1,6 +1,6 @@
 # TLS transport over TURN/TCP
 
-Status: partial implementation, not production-ready. Rustls 0.23.46 is pinned in `ghoncha-transport-turn`. `TlsClientEngine` and `TlsStreamSocket` provide a nonblocking TLS client stream for `TurnTcpDriver`. A verified in-memory client/server handshake and negative certificate tests pass; platform trust-store integration, live TLS-enabled TURN interoperability and Android application integration remain unimplemented.
+Status: partial implementation, not production-ready. Rustls 0.23.46 is pinned in `ghoncha-transport-turn`. `TlsClientEngine` and `TlsStreamSocket` provide a nonblocking TLS client stream for `TurnTcpDriver`. A verified in-memory client/server handshake and negative certificate tests pass. Android system-trust bootstrap is wired into the initial Android app/native layer and cross-compiled for four ABIs; on-device trust verification, TLS-enabled TURN interoperability and end-to-end VPN integration remain unvalidated.
 
 ## 1. Scope and protocol layering
 
@@ -37,9 +37,9 @@ The endpoint name used for certificate verification must come from trusted endpo
 
 ## 3. Platform trust
 
-Use `rustls-platform-verifier` 0.7.1 as the selected integration candidate, but do not add it to `ghoncha-transport-turn`: that crate is a portable transport implementation and must continue accepting a caller-supplied verified `ClientConfig`. The verifier belongs in the platform bootstrap/application layer. Version 0.7.1 (2026-09-24) changes Android distribution: its Kotlin component is delivered through the project's GitHub-hosted Maven repository, not a Cargo-bundled local Maven repository. The Gradle dependency version must be resolved from the `Cargo.lock` entry for `rustls-platform-verifier-android` to keep the native and Kotlin components aligned.
+Use `rustls-platform-verifier` 0.7.1 in the platform bootstrap/application layer, not in `ghoncha-transport-turn`. The portable TURN crate continues to accept a caller-supplied verified `ClientConfig`. Version 0.7.1 (2026-09-24) distributes its Android Kotlin component through the project's GitHub-hosted Maven repository. The Android Gradle build resolves the AAR version from the `Cargo.lock` entry for `rustls-platform-verifier-android`, keeping native and Kotlin components aligned.
 
-- Android: the current repository has no Android app, Gradle project, Kotlin bootstrap, or JNI entry point, so this integration cannot yet be compiled or instrumented here. When that layer is added: configure the Maven repository `https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/`; declare the unversioned `rustls:rustls-platform-verifier` artifact and resolve its version from the Cargo.lock package `rustls-platform-verifier-android`; run the documented `cargo metadata` Gradle setup so Cargo locates the component; add `-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }` for R8/ProGuard; and call `rustls_platform_verifier::android::init_with_env` once from the application/native startup JNI entry point with the application Context, before any TLS verification. Treat initialization failure as fatal for TLS startup. Do not hand-roll a second Android certificate verifier or add the Android/JNI dependency to the portable TURN crate.
+- Android: the initial `android/app` module declares the GitHub-hosted Maven repository and the unversioned `org.rustls:rustls-platform-verifier` AAR. Its Gradle `ValueSource` reads `rustls-platform-verifier-android` from the workspace `Cargo.lock`; a Cargo metadata task runs before the Android build. `crates/platform-android` exports a JNI bootstrap that calls `rustls_platform_verifier::android::init_with_env` from `GhonchaApplication.onCreate`, passing the application Context. Initialization failure throws a Java RuntimeException and prevents application startup. The same crate exposes `platform_tls_client_config()`, which refuses to build a client config before successful initialization and explicitly disables TLS early data. The debug APK CI cross-compiles the native library for arm64-v8a, armeabi-v7a, x86_64 and x86. R8 keeps the verifier's JNI Kotlin classes. The app module remains a bootstrap shell; it does not yet contain the VPN service or full client lifecycle. On-device Trust Manager decisions and instrumentation tests remain release gates.
 - iOS/macOS: use the platform Security framework trust path exposed by the verifier crate; verify deployment-target and framework integration in the actual Apple build.
 - Windows: use the Windows platform certificate verifier exposed by the same crate.
 - Other targets: explicitly choose and document the system/web-PKI root strategy. Do not silently ship an empty root store.
@@ -127,13 +127,14 @@ Implemented:
 - `TlsStreamSocket<S>` adapter that wraps an already-connected TURN TCP socket;
 - integration with the existing `TurnTcpDriver` through `TurnStreamSocket`;
 - tests for ClientHello generation, a verified in-memory client/server handshake, bidirectional TLS stream data, untrusted-CA and hostname-mismatch rejection, partial TLS output draining, handshake gating, oversized input, early-data rejection, partial socket writes, and TURN driver plaintext isolation;
+- Android Cargo cross-build of the JNI verifier bootstrap for arm64-v8a, armeabi-v7a, x86_64 and x86, plus a debug APK build in CI;
 - CI formatting, Clippy and tests with all Cargo features enabled.
 
 Not implemented or not yet validated:
 - expired-certificate validation test;
 - live TLS-enabled TURN server interoperability and end-to-end gateway validation;
-- `rustls-platform-verifier` dependency in the platform/application layer and platform trust-store integration;
-- Android app module, Kotlin/Gradle Maven integration, JNI initialization and Android instrumentation tests;
+- Android instrumentation tests and on-device validation of system Trust Manager decisions;
+- Android VPN service, network lifecycle, and complete client-core integration;
 - iOS and Windows trust-store integration;
 - full TLS-enabled TURN server integration covering Allocate, Permission, ChannelBind and peer data;
 - network handover, session resumption policy and production transport selection;
