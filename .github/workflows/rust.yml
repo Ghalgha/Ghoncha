@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, work/android-protected-udp-preparation]
   merge_group:
   workflow_dispatch:
 
