@@ -118,6 +118,12 @@ The GHONCHA server is the TURN peer: the VK relay forwards peer datagrams to a U
 
 TURN allocation, TURN permission, channel binding, DTLS session, GHONCHA peer authentication, and VPN data-plane health are separate states. A successful Allocate does not mean the VPN tunnel is connected.
 
+### In-memory challenge transaction boundary
+
+The Android challenge transaction object binds a challenge ID to the exact original HTTPS URL, form body, redirect URI, and CAPTCHA correlation fields. The body is copied on entry and returned as defensive copies; a challenge response can be consumed once, only for the matching ID, before its optional monotonic expiry. Expired transactions are closed. Blank, oversized, or control-character responses are rejected.
+
+This object is intentionally not a VK retry encoder. It returns a short-lived submission context to the provider adapter; the adapter must validate the current live VK schema before adding challenge fields and resending the original operation. Do not infer retry parameter names or silently start a new anonymous session. The transaction and answer remain in memory only, and their types avoid generated secret-bearing `toString()` methods. The shared challenge-attempt budget remains owned by the credential-provider cycle, not reset when a new transaction object is created.
+
 ### Reference-specific TURN compatibility notes
 
 - CSQTT adds optional STUN attribute `0x8021` with value `fc 09 b4 6f` to its control requests. Other supplied Pion-based references use ordinary TURN without this attribute. GHONCHA must treat it as an optional provider compatibility profile and verify it against live VK TURN endpoints before enabling it.
