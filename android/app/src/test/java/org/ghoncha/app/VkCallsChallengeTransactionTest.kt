@@ -37,6 +37,18 @@ class VkCallsChallengeTransactionTest {
         )
         assertEquals("sid-1", submission.captchaSid)
         assertEquals("opaque-success-token", submission.response)
+        val retryBody = java.net.URLDecoder.decode(
+            submission.buildRetryBody().toString(Charsets.UTF_8),
+            Charsets.UTF_8.name(),
+        )
+        assertTrue(retryBody.contains("access_token=private"))
+        assertTrue(retryBody.contains("method=calls.getAnonymousToken"))
+        assertTrue(retryBody.contains("captcha_key="))
+        assertTrue(retryBody.contains("captcha_sid=sid-1"))
+        assertTrue(retryBody.contains("is_sound_captcha=0"))
+        assertTrue(retryBody.contains("success_token=opaque-success-token"))
+        assertTrue(retryBody.contains("captcha_ts=123"))
+        assertTrue(retryBody.contains("captcha_attempt=2"))
         assertNull(transaction.submit(7, "second-answer", 1_001))
     }
 
@@ -56,6 +68,44 @@ class VkCallsChallengeTransactionTest {
                 3, "https://api.vk.ru/method/test", byteArrayOf(1), challenge(), null,
             ).submit(3, "bad\nanswer", 1),
         )
+    }
+
+    @Test
+    fun retryDefaultsMissingAttemptAndRejectsAlreadyPresentChallengeFields() {
+        val noAttempt = VkCallsResult.Challenge(
+            redirectUri = "https://id.vk.ru/captcha?session_token=opaque",
+            captchaSid = "sid",
+            captchaTs = null,
+            captchaAttempt = null,
+        )
+        val submission = VkCallsChallengeTransaction(
+            5,
+            "https://api.vk.ru/method/calls.getAnonymousToken",
+            "access_token=private".toByteArray(),
+            noAttempt,
+            null,
+        ).submit(5, "token + /=", 1)!!
+        val decoded = java.net.URLDecoder.decode(
+            submission.buildRetryBody().toString(Charsets.UTF_8),
+            Charsets.UTF_8.name(),
+        )
+        assertTrue(decoded.contains("success_token=token + /="))
+        assertTrue(decoded.contains("captcha_ts="))
+        assertTrue(decoded.contains("captcha_attempt=1"))
+
+        val duplicate = VkCallsChallengeTransaction(
+            6,
+            "https://api.vk.ru/method/calls.getAnonymousToken",
+            "access_token=private&captcha_sid=old".toByteArray(),
+            noAttempt,
+            null,
+        ).submit(6, "token", 1)!!
+        try {
+            duplicate.buildRetryBody()
+            throw AssertionError("Expected duplicate challenge fields to be rejected")
+        } catch (_: IllegalArgumentException) {
+            // Expected: never send ambiguous duplicate form keys.
+        }
     }
 
     @Test
