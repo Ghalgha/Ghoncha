@@ -393,7 +393,7 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/9
 Ветка: `work/native-turn-runtime-core`  
 PR: https://github.com/Ghalgha/Ghoncha/pull/11  
 HEAD: `d518e0205db9c3fc36463adc1032f68fc98467b0`  
-Основан на `main`; открыт draft. Последний CI run `42394255925` запущен для HEAD `d518e0205db9c3fc36463adc1032f68fc98467b0`; Rust format/Clippy прошли на предыдущем HEAD, workspace tests выявили ошибку тестового ожидания timer scan, исправление внесено и новый CI ожидает выполнения.
+Основан на `main`; открыт draft. Последний CI run `42394255925` на HEAD `d518e0205db9c3fc36463adc1032f68fc98467b0`: Rust format/Clippy/workspace tests PASS; Android debug job выполняется, JVM tests, APK builds и ABI packaging ещё не завершены.
 
 - **[РЕАЛИЗОВАНО В PR №11]** Bounded slot owner с одним `Box<TurnUdpDriver<S>>` на allocation и fallible box allocation.
 - **[РЕАЛИЗОВАНО В PR №11]** Opaque registration tokens, earliest protocol deadline, bounded timer scanning с persistent cursor, readiness dispatch и pending-output query.
@@ -618,7 +618,7 @@ GHONCHA в целом не считается полноценным VPN до п
 
 - PR №4, PR №8 и PR №9 слиты в main; CI для PR №8/9 прошёл полностью.
 - PR №10 Ready for review, CI `42393331923` полностью PASS; не слит.
-- PR №11 draft; добавляет платформенно-независимый multi-allocation TURN runtime core; CI run `42394255925` ожидает выполнения после исправления тестового ожидания timer scan.
+- PR №11 draft; добавляет платформенно-независимый multi-allocation TURN runtime core; Rust CI PASS на HEAD `d518e0205db9c3fc36463adc1032f68fc98467b0`; Android CI run `42394255925` выполняется.
 - Успешный CI не доказывает работу на физическом устройстве, совместимость с живым VK TURN relay, корректность маршрута в ограниченной сети или наличие end-to-end VPN.
 - PR №2 и PR №3 остаются отдельными открытыми изменениями и не включены в статус `main`.
 - `PROJECT_CONTEXT.md` — единственная каноническая копия в `main`; отсутствие этого файла в остальных ветках является намеренным.
