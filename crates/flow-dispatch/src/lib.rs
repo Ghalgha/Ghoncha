@@ -233,7 +233,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
                 Slot::Occupied(mut entry) if entry.key == key => {
                     if worker_is_eligible(workers, entry.worker_id) {
                         entry.last_seen_ns = entry.last_seen_ns.max(now_ns);
-                        self.entries[index] = Some(entry);
+                        self.entries[index] = Slot::Occupied(entry);
                         self.metrics.affinity_hits = self.metrics.affinity_hits.saturating_add(1);
                         return Ok(DispatchDecision {
                             worker_id: entry.worker_id,
