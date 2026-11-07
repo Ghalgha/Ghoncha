@@ -20,14 +20,17 @@ internal object VkChallengeUrlPolicy {
 
     val originRules: Set<String> = allowedHosts.map { "https://$it" }.toSet()
 
-    fun allows(value: String): Boolean = try {
-        val uri = URI(value)
-        val host = uri.host?.lowercase() ?: return false
-        uri.scheme == "https" &&
-            uri.userInfo == null &&
-            (uri.port == -1 || uri.port == 443) &&
-            host in allowedHosts
-    } catch (_: Exception) {
-        false
+    fun allows(value: String): Boolean {
+        return try {
+            val uri = URI(value)
+            val host = uri.host?.lowercase()
+            uri.scheme == "https" &&
+                uri.userInfo == null &&
+                (uri.port == -1 || uri.port == 443) &&
+                host != null &&
+                host in allowedHosts
+        } catch (_: Exception) {
+            false
+        }
     }
 }
