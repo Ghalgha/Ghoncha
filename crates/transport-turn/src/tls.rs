@@ -960,7 +960,10 @@ mod tests {
         let request_ciphertext = std::mem::take(&mut socket.socket.writes);
         assert!(!request_ciphertext.is_empty());
         let mut input = std::io::Cursor::new(&request_ciphertext);
-        assert_eq!(server.read_tls(&mut input).unwrap(), request_ciphertext.len());
+        assert_eq!(
+            server.read_tls(&mut input).unwrap(),
+            request_ciphertext.len()
+        );
         server.process_new_packets().unwrap();
 
         let mut received = [0_u8; 64];
@@ -972,7 +975,10 @@ mod tests {
         let mut response_ciphertext = std::vec::Vec::new();
         server.write_tls(&mut response_ciphertext).unwrap();
         assert!(!response_ciphertext.is_empty());
-        socket.socket.read_data.extend_from_slice(&response_ciphertext);
+        socket
+            .socket
+            .read_data
+            .extend_from_slice(&response_ciphertext);
 
         let mut plaintext = [0_u8; 64];
         let plaintext_len = socket.read(&mut plaintext).unwrap();
