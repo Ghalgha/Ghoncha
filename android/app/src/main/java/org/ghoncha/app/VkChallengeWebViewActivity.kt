@@ -344,7 +344,7 @@ class VkChallengeWebViewActivity : Activity() {
                     : String(input);
                   return originalFetch.apply(this, arguments).then(response => {
                     try {
-                      response.clone().text().then(body => report(url, body));
+                      response.clone().text().then(body => report(url, body)).catch(() => {});
                     } catch (_) {}
                     return response;
                   });
@@ -367,7 +367,7 @@ class VkChallengeWebViewActivity : Activity() {
                         : null;
                     report(this.__ghonchaCaptchaUrl, body);
                   } catch (_) {}
-                });
+                }, { once: true });
                 return originalSend.apply(this, arguments);
               };
             })();
