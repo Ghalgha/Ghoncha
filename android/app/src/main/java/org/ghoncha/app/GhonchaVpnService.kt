@@ -54,9 +54,11 @@ class GhonchaVpnService : VpnService() {
             return
         }
 
-        startForegroundCompat(buildNotification())
         synchronized(stateLock) {
-            if (tunHandle != null) return
+            if (tunHandle != null) {
+                startForegroundCompat(buildNotification())
+                return
+            }
             var descriptor: ParcelFileDescriptor? = null
             try {
                 descriptor = Builder()
@@ -70,9 +72,13 @@ class GhonchaVpnService : VpnService() {
 
                 tunHandle = NativeTunInterfaceHandle.adopt(descriptor)
                 descriptor = null // detachFd() transferred the descriptor to Rust.
+                // Promote only after establish() has made this an active VPN.
+                startForegroundCompat(buildNotification())
                 updateNotification()
             } catch (failure: Throwable) {
                 descriptor?.close()
+                tunHandle?.close()
+                tunHandle = null
                 android.util.Log.e(TAG, "Unable to establish the local TUN interface", failure)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
