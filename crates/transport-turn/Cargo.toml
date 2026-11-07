@@ -17,6 +17,7 @@ ghoncha-flow-dispatch = { path = "../flow-dispatch" }
 ghoncha-packet = { path = "../packet" }
 ghoncha-transport-api = { path = "../transport-api" }
 turn-client-proto = { version = "=0.7.3", default-features = false }
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
 
 [dev-dependencies]
 turn-server-proto = { version = "=0.7.3", default-features = false, features = ["std"] }
