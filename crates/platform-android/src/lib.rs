@@ -349,8 +349,8 @@ mod android {
             }
 
             let mut written = 0;
-            for index in 0..count {
-                let flags = descriptors[index].revents;
+            for (index, descriptor) in descriptors.iter().take(count).enumerate() {
+                let flags = descriptor.revents;
                 if flags == 0 || written == output.len() {
                     continue;
                 }
