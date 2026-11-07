@@ -37,6 +37,8 @@ const IPV6_MAX_EXTENSION_BYTES: usize = 256;
 pub enum FlowKeyError {
     UnsupportedIpv6Extension(u8),
     InvalidIpv6FragmentHeader,
+    DuplicateIpv6FragmentHeader,
+    InvalidIpv6ExtensionOrder,
     Ipv6ExtensionLimit,
     InvalidIpv6ExtensionLength,
     TruncatedHeader,
@@ -61,8 +63,12 @@ impl FlowKey {
             IpVersion::V6 => {
                 let mut extension_count = 0;
                 let mut extension_bytes = 0;
+                let mut fragment_header_seen = false;
 
                 while is_ipv6_extension(protocol) {
+                    if protocol == 0 && extension_count != 0 {
+                        return Err(FlowKeyError::InvalidIpv6ExtensionOrder);
+                    }
                     if extension_count >= IPV6_MAX_EXTENSION_HEADERS {
                         return Err(FlowKeyError::Ipv6ExtensionLimit);
                     }
@@ -71,6 +77,10 @@ impl FlowKey {
                     let remaining = bytes.len().saturating_sub(payload_offset);
                     let header_len = match protocol {
                         44 => {
+                            if fragment_header_seen {
+                                return Err(FlowKeyError::DuplicateIpv6FragmentHeader);
+                            }
+                            fragment_header_seen = true;
                             if remaining < 8 {
                                 return Err(FlowKeyError::TruncatedHeader);
                             }
@@ -82,12 +92,17 @@ impl FlowKey {
                             }
                             protocol = header[0];
                             let fragment_offset = (offset_flags & 0xfff8) >> 3;
-                            if fragment_offset != 0 || offset_flags & 1 != 0 {
+                            if fragment_offset != 0 {
                                 fragment = Some(u32::from_be_bytes([
                                     header[4], header[5], header[6], header[7],
                                 ]));
                                 payload_offset += 8;
                                 break;
+                            }
+                            if offset_flags & 1 != 0 {
+                                fragment = Some(u32::from_be_bytes([
+                                    header[4], header[5], header[6], header[7],
+                                ]));
                             }
                             8
                         }
@@ -292,10 +307,11 @@ mod tests {
         let mut bytes = std::vec![0_u8; 40 + 9 * 8];
         bytes[0] = 0x60;
         bytes[4..6].copy_from_slice(&72_u16.to_be_bytes());
-        bytes[6] = 0;
-        for index in 0..9 {
+        let extension_types = [43, 60, 135, 139, 140, 43, 60, 135, 139];
+        bytes[6] = extension_types[0];
+        for index in 0..extension_types.len() {
             let offset = 40 + index * 8;
-            bytes[offset] = if index == 8 { 17 } else { 0 };
+            bytes[offset] = extension_types.get(index + 1).copied().unwrap_or(17);
             bytes[offset + 1] = 0;
         }
         let packet = IpPacket::parse(&bytes).unwrap();
@@ -305,7 +321,7 @@ mod tests {
             Err(FlowKeyError::Ipv6ExtensionLimit)
         );
         let fallback = FlowKey::from_packet_with_conservative_fallback(&packet).unwrap();
-        assert_eq!(fallback.protocol, 0);
+        assert_eq!(fallback.protocol, 43);
         assert_eq!(fallback.discriminator, FlowDiscriminator::Network);
     }
 
@@ -333,6 +349,39 @@ mod tests {
         bytes[42..44].copy_from_slice(&offset_flags.to_be_bytes());
         bytes[44..48].copy_from_slice(&id.to_be_bytes());
         bytes
+    }
+
+    #[test]
+    fn rejects_duplicate_ipv6_fragment_headers() {
+        let mut bytes = std::vec![0_u8; 40 + 16];
+        bytes[0] = 0x60;
+        bytes[4..6].copy_from_slice(&16_u16.to_be_bytes());
+        bytes[6] = 44;
+        bytes[40] = 44;
+        bytes[42..44].copy_from_slice(&1_u16.to_be_bytes());
+        bytes[48] = 17;
+
+        assert_eq!(
+            FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
+            Err(FlowKeyError::DuplicateIpv6FragmentHeader)
+        );
+    }
+
+    #[test]
+    fn rejects_hop_by_hop_header_after_another_extension() {
+        let mut bytes = std::vec![0_u8; 40 + 16];
+        bytes[0] = 0x60;
+        bytes[4..6].copy_from_slice(&16_u16.to_be_bytes());
+        bytes[6] = 60; // Destination Options precedes the invalid Hop-by-Hop header.
+        bytes[40] = 0;
+        bytes[41] = 0;
+        bytes[48] = 17;
+        bytes[49] = 0;
+
+        assert_eq!(
+            FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
+            Err(FlowKeyError::InvalidIpv6ExtensionOrder)
+        );
     }
 
     #[test]
@@ -423,11 +472,13 @@ mod tests {
         let mut bytes = std::vec![0_u8; 40 + 9 * 8];
         bytes[0] = 0x60;
         bytes[4..6].copy_from_slice(&72_u16.to_be_bytes());
-        bytes[6] = 0;
-        for index in 0..9 {
+        let extension_types = [43, 60, 135, 139, 140, 43, 60, 135, 139];
+        bytes[6] = extension_types[0];
+        for (index, next) in extension_types.iter().enumerate() {
             let offset = 40 + index * 8;
-            bytes[offset] = if index == 8 { 17 } else { 0 };
+            bytes[offset] = extension_types.get(index + 1).copied().unwrap_or(17);
             bytes[offset + 1] = 0;
+            let _ = next;
         }
         assert_eq!(
             FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
