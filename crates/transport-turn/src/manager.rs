@@ -76,6 +76,7 @@ pub enum AllocationManagerError {
     DeallocationNotConfirmed,
     InvalidStateTransition,
     PendingWorkRemains,
+    ActiveFlowsRemain,
     Dispatch(DispatchError),
 }
 
@@ -277,7 +278,13 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         for slot in self.slots.iter().flatten() {
             workers[count] = Worker {
                 id: slot.id,
-                eligible: slot.state == AllocationState::Active,
+                // Draining allocations remain eligible for their existing
+                // flow affinities, but admit_new_flow() below selects only
+                // Active allocations for new flows.
+                eligible: matches!(
+                    slot.state,
+                    AllocationState::Active | AllocationState::Draining
+                ),
             };
             count += 1;
         }
@@ -332,6 +339,9 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
     /// caller drives the TURN Delete transaction through engine_mut(). Call
     /// take_drained only after Delete succeeds or reaches a terminal failure.
     pub fn begin_deallocation(&mut self, id: u16) -> Result<(), AllocationManagerError> {
+        if self.flow_dispatcher.assigned_flows(id) != 0 {
+            return Err(AllocationManagerError::ActiveFlowsRemain);
+        }
         let slot = self
             .get_mut(id)
             .ok_or(AllocationManagerError::UnknownAllocation)?;
@@ -408,6 +418,9 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
             .expect("located slot must be occupied");
         if slot.load.in_flight_packets != 0 || slot.load.queued_bytes != 0 {
             return Err(AllocationManagerError::PendingWorkRemains);
+        }
+        if self.flow_dispatcher.assigned_flows(id) != 0 {
+            return Err(AllocationManagerError::ActiveFlowsRemain);
         }
         if slot.state != AllocationState::Deallocating {
             return Err(AllocationManagerError::NotDeallocating);
@@ -633,6 +646,24 @@ mod tests {
     }
 
     #[test]
+    fn draining_cannot_deallocate_while_flow_affinity_entries_remain() {
+        let mut manager = TurnAllocationManager::<2>::new();
+        manager.insert(7, engine(40007)).unwrap();
+        let _ = manager.dispatch_flow(flow_key(), 1, 2).unwrap();
+        manager.begin_drain(7).unwrap();
+
+        assert_eq!(
+            manager.begin_deallocation(7),
+            Err(AllocationManagerError::ActiveFlowsRemain)
+        );
+
+        // Once the flow's configured idle lifetime expires, its affinity
+        // entry is removed and deallocation may proceed.
+        assert_eq!(manager.expire_idle_flows(10, 9, 1024), 1);
+        manager.begin_deallocation(7).unwrap();
+    }
+
+    #[test]
     fn draining_waits_for_queued_bytes_even_when_no_packet_is_in_flight() {
         let mut manager = TurnAllocationManager::<1>::new();
         manager.insert(1, engine(40001)).unwrap();
@@ -669,6 +700,11 @@ mod tests {
         };
         assert_eq!(second.kind, DispatchKind::AffinityHit);
         manager.begin_drain(7).unwrap();
+        assert_eq!(
+            manager.begin_deallocation(7),
+            Err(AllocationManagerError::ActiveFlowsRemain)
+        );
+        manager.expire_idle_flows(3, 1, 1024);
         manager.begin_deallocation(7).unwrap();
         manager.confirm_deallocation(7).unwrap();
         manager.take_drained(7).unwrap();
@@ -679,6 +715,43 @@ mod tests {
         };
         assert_eq!(after_reuse.kind, DispatchKind::NewFlow);
         assert_eq!(after_reuse.worker_id, 7);
+    }
+
+    #[test]
+    fn draining_allocation_keeps_existing_flows_but_rejects_new_ones() {
+        let mut manager = TurnAllocationManager::<2>::new();
+        manager.insert(7, engine(40007)).unwrap();
+
+        let first = manager.dispatch_flow(flow_key(), 1, 2).unwrap();
+        let FlowAdmissionDecision::Dispatched(first) = first else {
+            panic!("initial flow should be dispatched")
+        };
+        assert_eq!(first.worker_id, 7);
+        assert_eq!(first.kind, DispatchKind::NewFlow);
+
+        manager.insert(8, engine(40008)).unwrap();
+        manager.begin_drain(7).unwrap();
+
+        let existing = manager.dispatch_flow(flow_key(), 2, 2).unwrap();
+        let FlowAdmissionDecision::Dispatched(existing) = existing else {
+            panic!("existing flow should remain on its draining allocation")
+        };
+        assert_eq!(existing.worker_id, 7);
+        assert_eq!(existing.kind, DispatchKind::AffinityHit);
+
+        let new_key = FlowKey {
+            discriminator: FlowDiscriminator::Ports {
+                source: 40002,
+                destination: 443,
+            },
+            ..flow_key()
+        };
+        let new_flow = manager.dispatch_flow(new_key, 3, 2).unwrap();
+        let FlowAdmissionDecision::Dispatched(new_flow) = new_flow else {
+            panic!("new flow should use the active allocation")
+        };
+        assert_eq!(new_flow.worker_id, 8);
+        assert_eq!(new_flow.kind, DispatchKind::NewFlow);
     }
 
     #[test]
