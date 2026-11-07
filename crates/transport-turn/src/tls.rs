@@ -422,9 +422,11 @@ impl<S: TurnStreamSocket> TurnStreamSocket for TlsStreamSocket<S> {
         if self.input_offset == self.input_len {
             self.input_offset = 0;
             self.input_len = match self.socket.read(&mut self.ciphertext_input) {
+                // A raw TCP EOF without an authenticated TLS close_notify is
+                // truncation, not a clean end of the TLS stream.
                 Ok(0) => {
                     self.retired = true;
-                    return Ok(0);
+                    return Err(TurnStreamIoError::Failed);
                 }
                 Ok(read) if read <= self.ciphertext_input.len() => read,
                 Ok(_) => {
@@ -819,6 +821,7 @@ mod tests {
         peer: core::net::SocketAddr,
         writes: std::vec::Vec<u8>,
         write_limit: usize,
+        eof: bool,
     }
 
     impl TurnStreamSocket for MockStream {
@@ -831,7 +834,11 @@ mod tests {
         }
 
         fn read(&mut self, _buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
-            Err(TurnStreamIoError::WouldBlock)
+            if self.eof {
+                Ok(0)
+            } else {
+                Err(TurnStreamIoError::WouldBlock)
+            }
         }
 
         fn write(&mut self, bytes: &[u8]) -> Result<usize, TurnStreamIoError> {
@@ -847,7 +854,19 @@ mod tests {
             peer: "198.51.100.1:443".parse().unwrap(),
             writes: std::vec::Vec::new(),
             write_limit,
+            eof: false,
         }
+    }
+
+    #[test]
+    fn unexpected_tcp_eof_without_tls_close_notify_fails_closed() {
+        let mut stream = mock_stream(usize::MAX);
+        stream.eof = true;
+        let mut socket =
+            TlsStreamSocket::new(stream, client_config(), server_name()).unwrap();
+
+        assert_eq!(socket.read(&mut [0_u8; 64]), Err(TurnStreamIoError::Failed));
+        assert_eq!(socket.read(&mut [0_u8; 64]), Err(TurnStreamIoError::Failed));
     }
 
     #[test]
