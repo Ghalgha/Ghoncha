@@ -1271,6 +1271,26 @@ mod tests {
     }
 
     #[test]
+    fn large_queue_storage_is_heap_backed_and_keeps_its_fixed_capacity() {
+        let queue = DatagramSendQueue::<256, 2048, 262_144>::try_new().unwrap();
+
+        assert_eq!(queue.entries.len(), 256);
+        assert!(queue.entries.capacity() >= 256);
+        assert!(core::mem::size_of_val(&queue) <= 64);
+    }
+
+    #[test]
+    fn send_queue_set_allocates_both_bounded_stores() {
+        let queues = TurnUdpSendQueues::<32, 256, 2048, 16_384, 262_144>::try_new()
+            .expect("bounded queue backing storage should allocate");
+
+        assert_eq!(queues.control.entries.len(), 32);
+        assert_eq!(queues.peer_data.entries.len(), 256);
+        assert_eq!(queues.control.queued_bytes(), 0);
+        assert_eq!(queues.peer_data.queued_bytes(), 0);
+    }
+
+    #[test]
     fn protocol_deadline_conversion_preserves_nonnegative_monotonic_nanoseconds() {
         assert_eq!(
             monotonic_deadline(Instant::from_nanos(1_234_567_890)),
