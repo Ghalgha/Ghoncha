@@ -277,7 +277,13 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         for slot in self.slots.iter().flatten() {
             workers[count] = Worker {
                 id: slot.id,
-                eligible: slot.state == AllocationState::Active,
+                // Draining allocations remain eligible for their existing
+                // flow affinities, but admit_new_flow() below selects only
+                // Active allocations for new flows.
+                eligible: matches!(
+                    slot.state,
+                    AllocationState::Active | AllocationState::Draining
+                ),
             };
             count += 1;
         }
@@ -679,6 +685,43 @@ mod tests {
         };
         assert_eq!(after_reuse.kind, DispatchKind::NewFlow);
         assert_eq!(after_reuse.worker_id, 7);
+    }
+
+    #[test]
+    fn draining_allocation_keeps_existing_flows_but_rejects_new_ones() {
+        let mut manager = TurnAllocationManager::<2>::new();
+        manager.insert(7, engine(40007)).unwrap();
+
+        let first = manager.dispatch_flow(flow_key(), 1, 2).unwrap();
+        let FlowAdmissionDecision::Dispatched(first) = first else {
+            panic!("initial flow should be dispatched")
+        };
+        assert_eq!(first.worker_id, 7);
+        assert_eq!(first.kind, DispatchKind::NewFlow);
+
+        manager.insert(8, engine(40008)).unwrap();
+        manager.begin_drain(7).unwrap();
+
+        let existing = manager.dispatch_flow(flow_key(), 2, 2).unwrap();
+        let FlowAdmissionDecision::Dispatched(existing) = existing else {
+            panic!("existing flow should remain on its draining allocation")
+        };
+        assert_eq!(existing.worker_id, 7);
+        assert_eq!(existing.kind, DispatchKind::AffinityHit);
+
+        let new_key = FlowKey {
+            discriminator: FlowDiscriminator::Ports {
+                source: 40002,
+                destination: 443,
+            },
+            ..flow_key()
+        };
+        let new_flow = manager.dispatch_flow(new_key, 3, 2).unwrap();
+        let FlowAdmissionDecision::Dispatched(new_flow) = new_flow else {
+            panic!("new flow should use the active allocation")
+        };
+        assert_eq!(new_flow.worker_id, 8);
+        assert_eq!(new_flow.kind, DispatchKind::NewFlow);
     }
 
     #[test]
