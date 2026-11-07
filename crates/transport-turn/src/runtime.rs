@@ -440,14 +440,21 @@ mod tests {
         runtime
             .insert(3, 13, driver(40003), MonotonicTime(0))
             .unwrap();
-        let mut ids = [0_u16; 2];
-        assert_eq!(runtime.poll_due(MonotonicTime(0), 2, |id, _, _| {
-            ids[0] = if ids[0] == 0 { id } else { ids[1] };
-            if ids[1] == 0 { ids[1] = id; }
-        }), 2);
-        assert_ne!(ids[0], ids[1]);
-        assert_eq!(runtime.poll_due(MonotonicTime(0), 2, |id, _, _| {
-            assert_eq!(id, 3);
-        }), 1);
+        let mut seen = [false; 4];
+        assert_eq!(
+            runtime.poll_due(MonotonicTime(0), 2, |id, _, _| {
+                seen[usize::from(id)] = true;
+            }),
+            2
+        );
+        assert!(seen[1]);
+        assert!(seen[2]);
+        assert!(!seen[3]);
+        assert_eq!(
+            runtime.poll_due(MonotonicTime(0), 2, |id, _, _| {
+                assert_eq!(id, 3);
+            }),
+            1
+        );
     }
 }
