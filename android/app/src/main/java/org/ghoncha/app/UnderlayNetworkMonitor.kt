@@ -51,27 +51,27 @@ internal class UnderlayNetworkMonitor(
         ) {
             val snapshot = synchronized(lock) {
                 if (!started) return
+                val hasInternet = capabilities.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_INTERNET,
+                )
+                val validated = capabilities.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_VALIDATED,
+                )
+                val metered = !capabilities.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_NOT_METERED,
+                )
+                val wifi = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                val cellular = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                val ethernet = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
                 val previous = snapshots[network]
                 val changed = previous == null ||
                     !previous.capabilitiesAvailable ||
-                    previous.hasInternet != capabilities.hasCapability(
-                        NetworkCapabilities.NET_CAPABILITY_INTERNET,
-                    ) ||
-                    previous.validated != capabilities.hasCapability(
-                        NetworkCapabilities.NET_CAPABILITY_VALIDATED,
-                    ) ||
-                    previous.metered == capabilities.hasCapability(
-                        NetworkCapabilities.NET_CAPABILITY_NOT_METERED,
-                    ) ||
-                    previous.wifi != capabilities.hasTransport(
-                        NetworkCapabilities.TRANSPORT_WIFI,
-                    ) ||
-                    previous.cellular != capabilities.hasTransport(
-                        NetworkCapabilities.TRANSPORT_CELLULAR,
-                    ) ||
-                    previous.ethernet != capabilities.hasTransport(
-                        NetworkCapabilities.TRANSPORT_ETHERNET,
-                    )
+                    previous.hasInternet != hasInternet ||
+                    previous.validated != validated ||
+                    previous.metered != metered ||
+                    previous.wifi != wifi ||
+                    previous.cellular != cellular ||
+                    previous.ethernet != ethernet
                 if (!changed) return
 
                 val generation = if (previous == null) {
@@ -83,18 +83,12 @@ internal class UnderlayNetworkMonitor(
                     network = network,
                     generation = generation,
                     capabilitiesAvailable = true,
-                    hasInternet = capabilities.hasCapability(
-                        NetworkCapabilities.NET_CAPABILITY_INTERNET,
-                    ),
-                    validated = capabilities.hasCapability(
-                        NetworkCapabilities.NET_CAPABILITY_VALIDATED,
-                    ),
-                    metered = !capabilities.hasCapability(
-                        NetworkCapabilities.NET_CAPABILITY_NOT_METERED,
-                    ),
-                    wifi = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
-                    cellular = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
-                    ethernet = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+                    hasInternet = hasInternet,
+                    validated = validated,
+                    metered = metered,
+                    wifi = wifi,
+                    cellular = cellular,
+                    ethernet = ethernet,
                 ).also { snapshots[network] = it }
             }
             onNetworkChanged(snapshot)
@@ -128,22 +122,20 @@ internal class UnderlayNetworkMonitor(
         synchronized(lock) {
             if (started) return
             started = true
-        }
-        try {
-            connectivityManager.registerNetworkCallback(
-                NetworkRequest.Builder()
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                    .build(),
-                callback,
-            )
-        } catch (failure: Throwable) {
-            synchronized(lock) {
+            try {
+                connectivityManager.registerNetworkCallback(
+                    NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                        .build(),
+                    callback,
+                )
+            } catch (failure: Throwable) {
                 started = false
                 snapshots.clear()
                 generations.clear()
+                throw failure
             }
-            throw failure
         }
     }
 
