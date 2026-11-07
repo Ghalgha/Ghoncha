@@ -1274,9 +1274,7 @@ mod tests {
         )
         .unwrap();
 
-        let progress = driver
-            .poll_control_with_deadline(MonotonicTime(1))
-            .unwrap();
+        let progress = driver.poll_control_with_deadline(MonotonicTime(1)).unwrap();
         match &progress.protocol {
             TurnPollRet::WaitUntil(deadline) => assert_eq!(
                 progress.next_deadline,
