@@ -124,7 +124,7 @@ internal class VkCallsChallengeSubmission(
             "Original VK request already contains CAPTCHA response fields"
         }
 
-        val fields = listOf(
+        val fields: List<Pair<String, String>> = listOf(
             "captcha_key" to "",
             "captcha_sid" to captchaSid,
             "is_sound_captcha" to "0",
