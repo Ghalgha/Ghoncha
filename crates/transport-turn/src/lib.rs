@@ -7,9 +7,9 @@
 //! Packet buffers are supplied by the caller; no socket or async runtime is
 //! created here.
 
+extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
-extern crate alloc;
 
 mod manager;
 pub use manager::*;
