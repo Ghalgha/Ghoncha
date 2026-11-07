@@ -15,6 +15,11 @@ pub use manager::*;
 mod tcp;
 pub use tcp::*;
 
+#[cfg(feature = "std")]
+mod tls;
+#[cfg(feature = "std")]
+pub use tls::*;
+
 use core::convert::TryFrom;
 use core::net::{IpAddr, SocketAddr};
 
