@@ -160,9 +160,11 @@ fn turn_tcp_stream_allocation_permission_and_peer_data_roundtrip() {
     assert!(!allocation.is_empty());
     deliver_stream(&mut client, allocation, now, 7);
 
-    assert!(client.relayed_addresses().any(|(transport, addr)| {
-        transport == TransportType::Udp && addr == relay_addr
-    }));
+    assert!(
+        client
+            .relayed_addresses()
+            .any(|(transport, addr)| { transport == TransportType::Udp && addr == relay_addr })
+    );
 
     // Permissions apply to the UDP peer even though the client/server hop is TCP.
     client.create_permission(peer_addr.ip(), now).unwrap();
@@ -219,10 +221,7 @@ fn turn_tcp_stream_allocation_permission_and_peer_data_roundtrip() {
         .build();
 
     assert_eq!(returned.transport, TransportType::Tcp);
-    match client
-        .receive_stream_bytes(&returned.data, now)
-        .unwrap()
-    {
+    match client.receive_stream_bytes(&returned.data, now).unwrap() {
         TurnReceiveResult::PeerData(peer_data) => {
             assert_eq!(peer_data.peer, peer_addr);
             assert_eq!(peer_data.data(), peer_payload.as_slice());
