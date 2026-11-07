@@ -73,9 +73,9 @@ class GhonchaVpnService : VpnService() {
                 updateNotification()
             } catch (failure: Throwable) {
                 descriptor?.close()
+                android.util.Log.e(TAG, "Unable to establish the local TUN interface", failure)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
-                throw failure
             }
         }
     }
@@ -106,7 +106,7 @@ class GhonchaVpnService : VpnService() {
     }
 
     private fun startForegroundCompat(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
                 notification,
@@ -159,6 +159,7 @@ class GhonchaVpnService : VpnService() {
         const val ACTION_PREPARE_TUN = "org.ghoncha.app.action.PREPARE_TUN"
         const val ACTION_STOP = "org.ghoncha.app.action.STOP_VPN"
 
+        private const val TAG = "GhonchaVpnService"
         private const val NOTIFICATION_CHANNEL_ID = "ghoncha_vpn"
         private const val NOTIFICATION_ID = 41
         private const val TUN_MTU = 1500
