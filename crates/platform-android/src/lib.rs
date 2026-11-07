@@ -390,9 +390,7 @@ mod android {
                 u32::try_from(count).map_err(|_| AndroidPollerError::CapacityReached)?;
             let timeout_ms = timeout
                 .as_nanos()
-                .saturating_add(999_999)
-                .checked_div(1_000_000)
-                .unwrap_or(0)
+                .div_ceil(1_000_000)
                 .min(c_int::MAX as u128) as c_int;
             // SAFETY: descriptors contains descriptor_count initialized pollfd
             // entries; the kernel writes only their revents fields.
