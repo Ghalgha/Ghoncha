@@ -645,6 +645,57 @@ mod tests {
         true
     }
 
+    fn server_initial_flight(
+        client: &mut TlsClientEngine,
+        server: &mut rustls::ServerConnection,
+    ) -> std::vec::Vec<u8> {
+        let mut client_hello = [0_u8; 4096];
+        let hello_len = client.drain_ciphertext(&mut client_hello).unwrap();
+        assert!(hello_len > 0);
+        let mut input = std::io::Cursor::new(&client_hello[..hello_len]);
+        assert_eq!(server.read_tls(&mut input).unwrap(), hello_len);
+        server.process_new_packets().unwrap();
+
+        let mut server_flight = std::vec::Vec::new();
+        server.write_tls(&mut server_flight).unwrap();
+        assert!(!server_flight.is_empty());
+        server_flight
+    }
+
+    #[test]
+    fn untrusted_tls_certificate_authority_is_rejected() {
+        let mut client = TlsClientEngine::new(
+            client_config(),
+            ServerName::try_from("example.com").unwrap(),
+        )
+        .unwrap();
+        let mut server = rustls::ServerConnection::new(test_server_config()).unwrap();
+        let server_flight = server_initial_flight(&mut client, &mut server);
+
+        assert!(matches!(
+            client.feed_ciphertext(&server_flight),
+            Err(TlsEngineError::Rustls(_))
+        ));
+        assert!(!client.application_data_ready());
+    }
+
+    #[test]
+    fn tls_server_name_mismatch_is_rejected() {
+        let mut client = TlsClientEngine::new(
+            trusted_test_client_config(),
+            ServerName::try_from("wrong.example.com").unwrap(),
+        )
+        .unwrap();
+        let mut server = rustls::ServerConnection::new(test_server_config()).unwrap();
+        let server_flight = server_initial_flight(&mut client, &mut server);
+
+        assert!(matches!(
+            client.feed_ciphertext(&server_flight),
+            Err(TlsEngineError::Rustls(_))
+        ));
+        assert!(!client.application_data_ready());
+    }
+
     #[test]
     fn verified_tls_handshake_carries_turn_stream_bytes_both_directions() {
         use std::io::{Read, Write};
