@@ -38,6 +38,7 @@ data class VkChallengeResult(val successToken: String?)
 class VkChallengeWebViewActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var status: TextView
+    private lateinit var completedButton: Button
     private var challengeToken: String? = null
     private var messageBridgeInstalled = false
     private var observerScript: ScriptHandler? = null
@@ -159,20 +160,22 @@ class VkChallengeWebViewActivity : Activity() {
                 finish()
             }
         }
-        val completed = Button(this).apply {
+        completedButton = Button(this).apply {
             text = "Вернуться в GHONCHA"
+            isEnabled = false
             setOnClickListener {
+                val token = challengeToken ?: return@setOnClickListener
                 CookieManager.getInstance().flush()
                 val result = Intent().apply {
                     putExtra(EXTRA_USER_CONFIRMED, true)
-                    challengeToken?.let { putExtra(EXTRA_CHALLENGE_TOKEN, it) }
+                    putExtra(EXTRA_CHALLENGE_TOKEN, token)
                 }
                 setResult(RESULT_OK, result)
                 finish()
             }
         }
         actions.addView(cancel)
-        actions.addView(completed)
+        actions.addView(completedButton)
         root.addView(
             actions,
             LinearLayout.LayoutParams(
@@ -224,6 +227,7 @@ class VkChallengeWebViewActivity : Activity() {
 
                 if (token != null) {
                     challengeToken = token
+                    completedButton.isEnabled = true
                     status.text =
                         "Ответ CAPTCHA получен. Ожидается проверка VK после возврата в GHONCHA."
                 }
