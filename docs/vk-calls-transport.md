@@ -80,6 +80,12 @@ Examples of observed method names in source include `auth.getAnonymToken`, `mess
 
 Never claim that a CAPTCHA result was accepted based only on a solver callback or `success_token`; verify the next provider response and resulting credential state. Do not disguise automated activity or circumvent explicit rate limits/account-security decisions.
 
+### Reference-observed VK CAPTCHA retry fields
+
+A source audit of the pinned `kiper292/wireguard-turn-android` snapshot (`d1dcffaf916bb8dc5aeca83868fcf5de47df28c7`, `tunnel/tools/libwg-go/vk_captcha.go` and `vk.go`) shows an `error_code` 14 challenge carrying `redirect_uri`, `captcha_sid`, `captcha_ts`, and `captcha_attempt`. The WebView/`captchaNotRobot.check` flow yields `success_token`; the caller then retries the original `calls.getAnonymousToken` operation with the challenge fields and the original anonymous access token. This is evidence from an unofficial implementation, not a stable or officially documented VK contract. Keep all original request parameters and challenge fields in the provider's private in-memory context; the UI handoff should return only the challenge response and correlation ID. A retry must use the exact active challenge context, not a freshly bootstrapped anonymous session. Validate this schema against live authorized VK responses before enabling the adapter.
+
+Do not copy the reference's browser-profile spoofing, synthetic cursor generation, randomized timing, or fingerprint fabrication. Those mechanisms are not required to model the challenge transaction and are outside GHONCHA's implementation boundary.
+
 ## 3. VK API documentation map
 
 Use these sources in this order when maintaining the credential provider:
