@@ -146,6 +146,15 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
             .map(|slot| slot.driver.as_mut())
     }
 
+    /// Borrows the socket for readiness registration; does not expose I/O ownership.
+    pub fn socket(&self, id: u16) -> Option<&S> {
+        self.slots
+            .iter()
+            .flatten()
+            .find(|slot| slot.id == id)
+            .map(|slot| slot.driver.socket())
+    }
+
     /// Earliest protocol timer across all active drivers.
     pub fn next_deadline(&self) -> Option<MonotonicTime> {
         self.slots
@@ -153,6 +162,19 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
             .flatten()
             .filter_map(|slot| slot.deadline)
             .min()
+    }
+
+    /// Computes a bounded wait from the earliest protocol timer.
+    pub fn wait_duration(
+        &self,
+        now: MonotonicTime,
+        max_wait: core::time::Duration,
+    ) -> core::time::Duration {
+        self.next_deadline()
+            .map(|deadline| {
+                core::time::Duration::from_nanos(deadline.0.saturating_sub(now.0)).min(max_wait)
+            })
+            .unwrap_or(max_wait)
     }
 
     /// Whether a token currently has queued output and should request POLLOUT.
@@ -480,6 +502,23 @@ mod tests {
         let removed = runtime.remove(7).unwrap();
         assert_eq!(removed.socket().local_addr().port(), 40001);
         assert!(runtime.is_empty());
+    }
+
+    #[test]
+    fn wait_duration_is_bounded_by_earliest_deadline() {
+        let mut runtime = TurnUdpRuntime::<MockSocket, 1>::new();
+        runtime
+            .insert(1, 11, driver(40001), MonotonicTime(10))
+            .unwrap();
+
+        assert_eq!(
+            runtime.wait_duration(MonotonicTime(9), core::time::Duration::from_nanos(5)),
+            core::time::Duration::from_nanos(1)
+        );
+        assert_eq!(
+            runtime.wait_duration(MonotonicTime(9), core::time::Duration::ZERO),
+            core::time::Duration::ZERO
+        );
     }
 
     #[test]
