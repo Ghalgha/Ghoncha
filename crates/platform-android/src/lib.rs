@@ -6,9 +6,9 @@
 mod android {
     use std::collections::HashMap;
     use std::ffi::c_void;
-    use std::os::raw::c_int;
-    use std::os::fd::{FromRawFd, OwnedFd};
     use std::net::{SocketAddr, UdpSocket};
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::raw::c_int;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::{Mutex, OnceLock};
 
