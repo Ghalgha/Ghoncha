@@ -8,6 +8,7 @@ mod android {
     use std::ffi::c_void;
     use std::os::raw::c_int;
     use std::os::fd::{FromRawFd, OwnedFd};
+    use std::net::{SocketAddr, UdpSocket};
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::{Mutex, OnceLock};
 
@@ -15,6 +16,9 @@ mod android {
     use jni::errors::ThrowRuntimeExAndDefault;
     use jni::jni_mangle;
     use jni::objects::{JClass, JObject};
+    use ghoncha_transport_turn::{
+        DatagramReceive, DatagramSocketError, TurnDatagramSocket,
+    };
 
     static ANDROID_VERIFIER_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static NEXT_SOCKET_HANDLE: AtomicU32 = AtomicU32::new(1);
@@ -126,6 +130,85 @@ mod android {
             return None;
         }
         socket_table().lock().ok()?.remove(&handle)
+    }
+
+    /// A protected Android UDP socket adopted by the Rust TURN driver.
+    ///
+    /// The underlying descriptor has already been marked non-blocking by the
+    /// adoption boundary. The wrapper keeps the native socket alive and maps
+    /// OS readiness operations into the portable TURN socket contract.
+    pub struct AndroidUdpSocket {
+        socket: UdpSocket,
+        local_addr: SocketAddr,
+    }
+
+    #[derive(Debug)]
+    pub enum AndroidSocketAdoptionError {
+        UnknownHandle,
+        LocalAddressUnavailable,
+        NonblockingConfigurationFailed,
+    }
+
+    /// Consumes a JNI registry handle and wraps its OwnedFd as a TURN UDP socket.
+    ///
+    /// After this call succeeds, the JNI handle no longer exists and Kotlin must
+    /// not attempt to close it. Dropping this wrapper closes the native socket.
+    pub fn take_android_udp_socket(
+        handle: i64,
+    ) -> Result<AndroidUdpSocket, AndroidSocketAdoptionError> {
+        let owned_fd = take_udp_socket(handle)
+            .ok_or(AndroidSocketAdoptionError::UnknownHandle)?;
+        let socket = UdpSocket::from(owned_fd);
+        socket
+            .set_nonblocking(true)
+            .map_err(|_| AndroidSocketAdoptionError::NonblockingConfigurationFailed)?;
+        let local_addr = socket
+            .local_addr()
+            .map_err(|_| AndroidSocketAdoptionError::LocalAddressUnavailable)?;
+        Ok(AndroidUdpSocket { socket, local_addr })
+    }
+
+    impl TurnDatagramSocket for AndroidUdpSocket {
+        fn local_addr(&self) -> SocketAddr {
+            self.local_addr
+        }
+
+        fn send_to(
+            &mut self,
+            destination: SocketAddr,
+            datagram: &[u8],
+        ) -> Result<usize, DatagramSocketError> {
+            self.socket.send_to(datagram, destination).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    DatagramSocketError::WouldBlock
+                } else {
+                    DatagramSocketError::Failed
+                }
+            })
+        }
+
+        fn recv_from(
+            &mut self,
+            buffer: &mut [u8],
+        ) -> Result<DatagramReceive, DatagramSocketError> {
+            self.socket
+                .recv_from(buffer)
+                .map(|(len, from)| DatagramReceive {
+                    len,
+                    from,
+                    // std::net does not expose MSG_TRUNC. Treat a full buffer
+                    // conservatively rather than parsing a possibly truncated
+                    // TURN datagram as complete.
+                    truncated: len == buffer.len(),
+                })
+                .map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::WouldBlock {
+                        DatagramSocketError::WouldBlock
+                    } else {
+                        DatagramSocketError::Failed
+                    }
+                })
+        }
     }
 
     /// Closes a socket handle that has not been transferred to the reactor.
