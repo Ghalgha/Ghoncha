@@ -13,9 +13,11 @@ internal class AndroidUnderlayDatagramSocketFactory(
     vpnService: VpnService,
     network: Network,
     networkGeneration: Long,
+    currentNetworkGeneration: () -> Long,
 ) {
     private val delegate = UnderlayDatagramSocketFactory(
         networkGeneration = networkGeneration,
+        currentNetworkGeneration = currentNetworkGeneration,
         resolveOnNetwork = network::getAllByName,
         protect = vpnService::protect,
         bindToNetwork = { socket -> network.bindSocket(socket) },
