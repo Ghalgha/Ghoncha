@@ -60,6 +60,9 @@ internal class VkCallsChallengeFlow(
             submission.retry(session)
         } catch (_: IOException) {
             return VkCallsResult.NetworkUnavailable
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return VkCallsResult.NetworkUnavailable
         } catch (_: IllegalArgumentException) {
             return VkCallsResult.InvalidResponse
         }
