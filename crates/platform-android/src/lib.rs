@@ -4,10 +4,10 @@
 
 #[cfg(target_os = "android")]
 mod android {
+    use jni::EnvUnowned;
     use jni::errors::ThrowRuntimeExAndDefault;
     use jni::jni_mangle;
     use jni::objects::{JClass, JObject};
-    use jni::EnvUnowned;
 
     /// Initializes the Android system-trust verifier before any TLS connection starts.
     ///
