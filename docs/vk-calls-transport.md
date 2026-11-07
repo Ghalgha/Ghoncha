@@ -1,32 +1,30 @@
 # GHONCHA VK Calls TURN transport
 
-Status: architecture baseline for an experimental, user-authorized transport. This document supersedes the earlier WebRTC DataChannel framing. The primary mechanism studied in the supplied reference projects is VK Calls TURN relay, not a generic VK Calls DataChannel.
+Status: architecture baseline for an experimental, user-authorized transport. The primary carrier is VK Calls TURN relay, not a generic VK Calls DataChannel.
 
 ## 1. Correct transport model
 
-The reference implementations use VK Calls as a source of TURN relay service and short-lived TURN credentials. They do not generally tunnel IP packets through the public VK Calls JavaScript SDK's DataChannel API.
+VK Calls is used as a source of TURN relay service and short-lived TURN credentials. Ghoncha does not tunnel IP packets through the public VK Calls JavaScript SDK DataChannel API.
 
-The supplied projects demonstrate several incompatible outer-carrier variants. The older Go and Rust proxies carry tunnel bytes as DTLS application data. The Android Go reference uses DTLS application data plus a separate ChaCha20-Poly1305 RTP-shaped wrapper. CSQTT implements a custom DTLS 1.2 handshake and negotiates `use_srtp` keying material, but its subsequent Rust `ObfsCipher` is a proprietary AES-CTR/HMAC-SHA1 RTP-shaped carrier, not standards-compliant RFC 3711 SRTP. These projects demonstrate the VK Calls → TURN → DTLS topology; they do not define one interoperable wire protocol.
-
-The proposed GHONCHA path is:
+The selected Ghoncha carrier is:
 
 ```text
 Android TUN
-  -> GHONCHA Rust packet engine
+  -> Ghoncha Rust packet engine
   -> WireGuard tunnel datagram (inner VPN authentication and AEAD)
-  -> RTP packet carrying one opaque GHONCHA record
+  -> RTP packet carrying one opaque Ghoncha record
   -> SRTP protection using keys exported by DTLS-SRTP
   -> TURN client (Allocate / Permission / ChannelBind / Refresh)
   -> VK Calls TURN relay
-  -> GHONCHA gateway UDP peer socket
+  -> Ghoncha Gateway UDP peer socket
   -> SRTP authentication/deprotection and RTP payload extraction
   -> WireGuard peer authentication/decapsulation
   -> VPN gateway / IP forwarding
 ```
 
-DTLS is used for authenticated key agreement and peer authentication; SRTP protects the RTP data packets after the handshake. TURN relays the resulting UDP datagrams to the configured GHONCHA gateway peer. The relay is not the VPN gateway and must not possess SRTP or WireGuard keys. WireGuard remains the inner VPN protocol and authoritative identity for user IP traffic. The gateway validates/decrypts the SRTP packet, extracts the complete WireGuard datagram, then passes it to the WireGuard endpoint.
+DTLS performs authenticated key agreement and peer authentication; SRTP protects RTP data packets after the handshake. TURN relays the resulting UDP datagrams to the configured Ghoncha Gateway peer. The relay is not the VPN gateway and must not possess SRTP or WireGuard keys. WireGuard remains the inner VPN protocol and authoritative identity for user IP traffic. The Gateway validates/decrypts the SRTP packet, extracts the complete WireGuard datagram, then passes it to the WireGuard endpoint.
 
-This is GHONCHA's proposed standards-based candidate based on the observed TURN + DTLS + RTP-shaped topology; it is not wire-compatible with the proprietary CSQTT wrapper. Keep a plain DTLS application-data carrier as a separate experimental profile only; do not mix DTLS application data with a negotiated DTLS-SRTP association. RFC 5764 specifies that after `use_srtp` negotiation, RTP/RTCP data is protected by SRTP and application data is not sent in DTLS application-data records.
+Keep a plain DTLS application-data carrier as a separate experimental profile only; do not mix DTLS application data with a negotiated DTLS-SRTP association. RFC 5764 specifies that after `use_srtp` negotiation, RTP/RTCP data is protected by SRTP and application data is not sent in DTLS application-data records.
 
 ### Initial GHONCHA RTP payload profile
 
@@ -44,18 +42,18 @@ A separate TURN-over-TCP/TLS mode carries STUN/TURN framing over a stream. It re
 
 ## 2. VK Calls credential and call lifecycle
 
-The supplied projects demonstrate two broad bootstrap paths:
+Ghoncha supports two user-authorized bootstrap paths:
 
 1. **User-provided call link/hash:** the user supplies a link/hash for a call they are authorized to use. The client derives or fetches temporary call/TURN access material using the implementation's VK Calls integration.
-2. **User-authorized call creation:** some newer CSQTT branches use VK account authorization and call-management methods to create and later end their own calls. This requires an explicit user login/consent flow and must be kept separate from the data plane.
+2. **User-authorized call creation:** where the provider exposes a supported call-management flow, Ghoncha may create and later end its own calls. This requires an explicit user login/consent flow and must be kept separate from the data plane.
 
-Observed code in the supplied repositories uses a mixture of:
-- VK API host/methods and versioned request formats;
+Depending on the currently supported provider flow, integration may involve:
+- versioned VK API host/method request formats;
 - Calls-specific anonymous bootstrap and preview/token methods;
-- the Calls/OK CDN backend to create/join the call and retrieve `turn_server.username`, `turn_server.credential`, and `turn_server.urls`;
-- call hashes/links and, in some variants, account access tokens.
+- call/session creation or joining and retrieval of `turn_server.username`, `turn_server.credential`, and `turn_server.urls`;
+- a user-provided call hash/link or an authorized account session.
 
-Examples of observed method names in source include `auth.getAnonymToken`, `messages.getCallPreview`, `messages.getAnonymCallToken`, `auth.anonymLogin`, and `vchat.joinConversationByLink`. These are source-observed integration details, not a promise that every method is part of the stable public VK API. The public VK API's documented `calls.start` / `calls.forceFinish` management methods are a different layer from the Calls-specific TURN credential bootstrap.
+Method names such as `auth.getAnonymToken`, `messages.getCallPreview`, `messages.getAnonymCallToken`, `auth.anonymLogin`, and `vchat.joinConversationByLink` are provider-integration details, not a promise that every method is part of the stable public VK API. The public VK API's documented `calls.start` / `calls.forceFinish` management methods are a different layer from Calls-specific TURN credential bootstrap.
 
 **Documentation boundary:** official VK API documentation is authoritative only for methods it actually documents. Calls-specific endpoints, request signatures, browser/TLS fingerprints, undocumented payloads, and returned TURN fields must be treated as unstable and independently verified. Do not represent private Calls backend methods as a supported public API. Do not hardcode one API version, host, IP range, or client fingerprint as permanent.
 
@@ -68,7 +66,7 @@ Use these sources in this order when maintaining the credential provider:
 - **Official VK API reference:** https://dev.vk.com/ru/reference — method contracts, authorization, access scopes, API versioning, errors, and rate limits.
 - **Calls management methods:** https://dev.vk.com/method/calls.start and https://dev.vk.com/method/calls.forceFinish — verify current availability, parameters, permissions, and response schemas directly against the live official reference before implementation.
 - **VK Android SDK:** https://github.com/VKCOM/vk-android-sdk — supported Android authorization and API client patterns; prefer the supported SDK for documented account API operations where practical.
-- **VK Calls JavaScript SDK:** https://st.mycdn.me/static/callssdk/latest/doc/index.html — call/media integration SDK. It is not the TURN credential provider and does not define the TURN protocol used by the reference VPN projects.
+- **VK Calls JavaScript SDK:** https://st.mycdn.me/static/callssdk/latest/doc/index.html — call/media integration SDK. It is not the TURN credential provider and does not define the TURN protocol used by Ghoncha.
 
 Maintain a small provider compatibility record containing the date checked, API version, method, authorization type, required scopes, documented/undocumented status, response schema version, and last successful integration test. Do not infer that a Calls-specific backend endpoint is public just because it appears under a VK-owned domain or is called by a first-party client.
 
@@ -91,16 +89,15 @@ The GHONCHA server is the TURN peer: the VK relay forwards peer datagrams to a U
 
 TURN allocation, TURN permission, channel binding, DTLS session, GHONCHA peer authentication, and VPN data-plane health are separate states. A successful Allocate does not mean the VPN tunnel is connected.
 
-### Reference-specific TURN compatibility notes
+### Provider-specific TURN compatibility notes
 
-- CSQTT adds optional STUN attribute `0x8021` with value `fc 09 b4 6f` to its control requests. Other supplied Pion-based references use ordinary TURN without this attribute. GHONCHA must treat it as an optional provider compatibility profile and verify it against live VK TURN endpoints before enabling it.
+- Use standard TURN attributes by default. Add a provider-specific extension only when live packet captures and repeatable interoperability tests demonstrate that it is required; keep it isolated behind an explicit compatibility option.
 - The current GHONCHA TURN adapter uses standard TURN attributes and does not yet inject that custom attribute. It also relies on TURN allocation/permission/channel refresh; the upstream client has no explicit periodic ChannelData keepalive API. The upper DTLS layer must own an authenticated, adaptive heartbeat rather than sending arbitrary dummy payloads.
-- Reference keepalive intervals vary: CSQTT uses approximately 10 seconds and the Android Go reference approximately 15 seconds. These are starting points for measurement, not universal constants. Mobile radio energy and observed NAT expiry must determine the production interval.
+- Do not hardcode a keepalive interval from an unrelated deployment. Derive refresh and heartbeat deadlines from protocol lifetimes, observed NAT behavior, provider constraints, and measured mobile-radio energy.
 
 ## 5. DTLS-SRTP, SRTP, and inner VPN security
 
-The CSQTT source inspected on 2026-11-06 contains a hand-written DTLS 1.2 handshake that negotiates SRTP exporter material. Its subsequent `ObfsCipher` uses a custom AES-128-CTR/HMAC-SHA1 key derivation and packet format; this is not standard SRTP and must not be treated as interoperable with a standards-based SRTP stack. The other supplied proxies use DTLS application data, sometimes with a separate custom AEAD wrapper.
-
+The outer carrier must use a standards-compliant DTLS-SRTP handshake and SRTP packet protection. Do not substitute a proprietary packet wrapper for SRTP or assume that negotiating `use_srtp` alone proves that subsequent packets conform to RFC 3711.
 GHONCHA requirements:
 - use standard WireGuard for inner VPN peer authentication, key establishment, replay protection, and IP-packet encryption; do not invent a GHONCHA-specific AEAD or key schedule;
 - use a maintained DTLS implementation for the DTLS-SRTP handshake and a maintained SRTP implementation for packet protection; do not implement either protocol or cryptographic primitives from scratch;
@@ -117,7 +114,7 @@ Candidate Rust components as of 2026-11-06:
 - `srtp 0.7.0`: MIT/Apache Rust wrapper around `libsrtp2`; its `VecLike` interface can protect/unprotect in caller-owned buffers, including fixed-size `Cursor<&mut [u8]>`. This may better fit GHONCHA's bounded data plane. AES-GCM policy constructors require the OpenSSL feature; the native build uses `srtp2-sys 3.0.2` (BSD-3-Clause), bindgen and a C toolchain. Android NDK cross-compilation and binary size remain unresolved.
 - These are interoperability-spike candidates, not approved production dependencies. Verify the exact `dimpl` `use_srtp` negotiation and key exporter with each SRTP implementation, then test against an independent implementation and the GHONCHA gateway. Benchmark allocation count, CPU, throughput, RTT and battery on real Android devices before selecting one.
 
-A plain DTLS application-data tunnel is a separate possible carrier profile. If selected, it must use a normal DTLS association without negotiating `use_srtp`; never send application-data records after establishing a DTLS-SRTP association. CSQTT's client exposes fingerprint pinning but its current `run_dtls_handshake` path does not call it, and `SrtpMode::Auto` can fall back to its custom Wrap carrier after DTLS failure. GHONCHA must validate gateway identity and fail closed rather than silently downgrade. Its current repository license is PolyForm Noncommercial 1.0.0, so GHONCHA must not incorporate its source without separate licensing permission.
+A plain DTLS application-data tunnel is a separate possible carrier profile. If selected, it must use a normal DTLS association without negotiating `use_srtp`; never send application-data records after establishing a DTLS-SRTP association. Ghoncha must validate Gateway identity and fail closed rather than silently downgrade to a weaker or unauthenticated carrier.
 
 ## 6. Transport modes and performance
 
@@ -165,16 +162,6 @@ Transport adapter contract:
 - `close(reason)` idempotently
 
 This is a semantic contract, not a commitment to a particular Rust crate, async runtime, or native FFI design.
-
-## 8. Source projects reviewed
-
-The reference audit is recorded in `docs/vk-turn-reference-audit.md`. The key starting points are:
-- `cacggghp/vk-turn-proxy`: original Go TURN/DTLS proxy design and basic client/server split;
-- `Urtyom-Alyanov/turn-proxy`: Rust TURN/DTLS implementation, client/server separation, UDP/TCP stream paths;
-- `amurcanov/csqtt`: later Rust client/server implementation with explicit TURN/STUN engine, packet pools, bounded queues, stream transport, worker management, Android VPN integration, and VK credential/call lifecycle;
-- `MYSOREZ/vk-turn-proxy-android`, `amurcanov/proxy-turn-vk-android`, and `SpaceNeuroX/proxy-turn-vk-android`: Android lifecycle/UI and integration examples.
-
-These repositories are implementation references, not production security audits. Check the exact commit and license before considering any code reuse.
 
 ## 9. Decision gates
 
