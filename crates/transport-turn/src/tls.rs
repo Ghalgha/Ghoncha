@@ -215,10 +215,8 @@ impl TlsClientEngine {
         }
 
         if self.pending_ciphertext.is_empty() && self.connection.wants_write() {
-            let mut sink = BoundedVecWriter::new(
-                &mut self.pending_ciphertext,
-                MAX_TLS_PENDING_CIPHERTEXT,
-            );
+            let mut sink =
+                BoundedVecWriter::new(&mut self.pending_ciphertext, MAX_TLS_PENDING_CIPHERTEXT);
             if self.connection.write_tls(&mut sink).is_err() {
                 self.output_failed = true;
                 self.pending_ciphertext.clear();
@@ -230,7 +228,10 @@ impl TlsClientEngine {
             }
         }
 
-        let remaining = self.pending_ciphertext.len().saturating_sub(self.pending_offset);
+        let remaining = self
+            .pending_ciphertext
+            .len()
+            .saturating_sub(self.pending_offset);
         let count = remaining.min(output.len());
         output[..count].copy_from_slice(
             &self.pending_ciphertext[self.pending_offset..self.pending_offset + count],
