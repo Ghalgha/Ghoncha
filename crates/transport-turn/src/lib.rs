@@ -1,8 +1,5 @@
 #![no_std]
 
-#[cfg(feature = "std")]
-extern crate std;
-
 //! Sans-I/O UDP TURN client adapter.
 //!
 //! This crate owns TURN protocol state only. The caller owns and drives the UDP
@@ -10,6 +7,8 @@ extern crate std;
 //! Packet buffers are supplied by the caller; no socket or async runtime is
 //! created here.
 
+#[cfg(feature = "std")]
+extern crate std;
 extern crate alloc;
 
 mod manager;
