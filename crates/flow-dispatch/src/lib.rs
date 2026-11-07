@@ -17,6 +17,13 @@ struct Entry {
     last_seen_ns: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Slot {
+    Empty,
+    Tombstone,
+    Occupied(Entry),
+}
+
 /// A transport allocation eligible to receive newly assigned flows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Worker {
@@ -60,7 +67,7 @@ pub struct DispatchMetrics {
 
 /// Fixed-capacity flow table. Storage is embedded in the dispatcher.
 pub struct FlowDispatcher<const CAPACITY: usize> {
-    entries: [Option<Entry>; CAPACITY],
+    entries: [Slot; CAPACITY],
     expiry_cursor: usize,
     metrics: DispatchMetrics,
 }
@@ -68,7 +75,7 @@ pub struct FlowDispatcher<const CAPACITY: usize> {
 impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
     pub const fn new() -> Self {
         Self {
-            entries: [None; CAPACITY],
+            entries: [Slot::Empty; CAPACITY],
             expiry_cursor: 0,
             metrics: DispatchMetrics {
                 lookups: 0,
@@ -106,11 +113,15 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
         for offset in 0..CAPACITY {
             let index = (start + offset) % CAPACITY;
             match self.entries[index] {
-                Some(entry) if entry.key == key => {
+                Slot::Occupied(entry) if entry.key == key => {
                     found = Some((index, entry));
                     break;
                 }
-                None if vacant.is_none() => vacant = Some(index),
+                Slot::Tombstone if vacant.is_none() => vacant = Some(index),
+                Slot::Empty => {
+                    vacant.get_or_insert(index);
+                    break;
+                }
                 _ => {}
             }
         }
@@ -118,7 +129,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
         if let Some((index, mut entry)) = found {
             if worker_is_eligible(workers, entry.worker_id) {
                 entry.last_seen_ns = entry.last_seen_ns.max(now_ns);
-                self.entries[index] = Some(entry);
+                self.entries[index] = Slot::Occupied(entry);
                 self.metrics.affinity_hits = self.metrics.affinity_hits.saturating_add(1);
                 return Ok(DispatchDecision {
                     worker_id: entry.worker_id,
@@ -149,7 +160,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
             return Err(DispatchError::NoEligibleWorkers);
         };
 
-        self.entries[index] = Some(Entry {
+        self.entries[index] = Slot::Occupied(Entry {
             key,
             worker_id,
             last_seen_ns: now_ns,
@@ -174,23 +185,23 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
         let start = (key.stable_hash() as usize) % CAPACITY;
         for offset in 0..CAPACITY {
             let index = (start + offset) % CAPACITY;
-            if let Some(mut entry) = self.entries[index]
-                && entry.key == key
-            {
-                if !worker_is_eligible(workers, entry.worker_id) {
-                    return None;
+            match self.entries[index] {
+                Slot::Occupied(mut entry) if entry.key == key => {
+                    if !worker_is_eligible(workers, entry.worker_id) {
+                        return None;
+                    }
+                    entry.last_seen_ns = entry.last_seen_ns.max(now_ns);
+                    self.entries[index] = Slot::Occupied(entry);
+                    self.metrics.lookups = self.metrics.lookups.saturating_add(1);
+                    self.metrics.affinity_hits = self.metrics.affinity_hits.saturating_add(1);
+                    return Some(DispatchDecision {
+                        worker_id: entry.worker_id,
+                        kind: DispatchKind::AffinityHit,
+                    });
                 }
-                entry.last_seen_ns = entry.last_seen_ns.max(now_ns);
-                self.entries[index] = Some(entry);
-                self.metrics.lookups = self.metrics.lookups.saturating_add(1);
-                self.metrics.affinity_hits = self.metrics.affinity_hits.saturating_add(1);
-                return Some(DispatchDecision {
-                    worker_id: entry.worker_id,
-                    kind: DispatchKind::AffinityHit,
-                });
+                Slot::Empty => return None,
+                Slot::Occupied(_) | Slot::Tombstone => {}
             }
-            // Deletions can leave holes in a linear-probing cluster. Scan the
-            // full bounded table so entries behind a retired worker stay visible.
         }
         None
     }
@@ -219,7 +230,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
         for offset in 0..CAPACITY {
             let index = (start + offset) % CAPACITY;
             match self.entries[index] {
-                Some(mut entry) if entry.key == key => {
+                Slot::Occupied(mut entry) if entry.key == key => {
                     if worker_is_eligible(workers, entry.worker_id) {
                         entry.last_seen_ns = entry.last_seen_ns.max(now_ns);
                         self.entries[index] = Some(entry);
@@ -238,7 +249,11 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
                         kind: DispatchKind::RemappedAfterWorkerLoss,
                     });
                 }
-                None if vacant.is_none() => vacant = Some(index),
+                Slot::Tombstone if vacant.is_none() => vacant = Some(index),
+                Slot::Empty => {
+                    vacant.get_or_insert(index);
+                    break;
+                }
                 _ => {}
             }
         }
@@ -275,7 +290,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
                 && now_ns >= entry.last_seen_ns
                 && now_ns - entry.last_seen_ns >= idle_timeout_ns
             {
-                self.entries[index] = None;
+                self.entries[index] = Slot::Tombstone;
                 expired += 1;
             }
         }
@@ -286,7 +301,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
 
     /// Returns the number of currently occupied flow entries.
     pub fn len(&self) -> usize {
-        self.entries.iter().filter(|entry| entry.is_some()).count()
+        self.entries.iter().filter(|entry| matches!(entry, Slot::Occupied(_))).count()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -302,8 +317,8 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
     pub fn forget_worker(&mut self, worker_id: u16) -> usize {
         let mut removed = 0;
         for entry in &mut self.entries {
-            if matches!(entry, Some(value) if value.worker_id == worker_id) {
-                *entry = None;
+            if matches!(entry, Slot::Occupied(value) if value.worker_id == worker_id) {
+                *entry = Slot::Tombstone;
                 removed += 1;
             }
         }
@@ -314,7 +329,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
     pub fn assigned_flows(&self, worker_id: u16) -> usize {
         self.entries
             .iter()
-            .filter(|entry| matches!(entry, Some(value) if value.worker_id == worker_id))
+            .filter(|entry| matches!(entry, Slot::Occupied(value) if value.worker_id == worker_id))
             .count()
     }
 }
