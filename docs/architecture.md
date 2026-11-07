@@ -28,13 +28,13 @@ Use the standard WireGuard protocol as the inner VPN protocol candidate; do not 
 The primary VK path uses two distinct security layers for different purposes:
 
 - **Inner WireGuard:** authoritative VPN peer identity, key establishment, replay protection, and IP-packet confidentiality/integrity.
-- **Outer DTLS-SRTP:** authenticated client-to-gateway key agreement and RTP/SRTP packet protection for the VK TURN carrier. It provides the media-shaped outer record format used by the studied CSQTT reference topology.
+- **Outer DTLS-SRTP:** authenticated client-to-gateway key agreement and RTP/SRTP packet protection for the VK TURN carrier. It provides the configured RTP/SRTP outer record format for the VK TURN carrier.
 
 After the DTLS-SRTP handshake, a complete WireGuard datagram is carried as the payload of one RTP packet and protected by SRTP. The gateway authenticates/deprotects SRTP, extracts the WireGuard datagram, then passes it to the WireGuard endpoint. Do not send DTLS record-layer `application_data` after negotiating the DTLS-SRTP `use_srtp` extension; RFC 5764 defines RTP/RTCP data to be protected by SRTP after the handshake. A plain DTLS application-data tunnel, if ever needed, is a separate carrier profile and must not negotiate `use_srtp`.
 
 The VK TURN relay sees TURN framing and opaque SRTP packets, not WireGuard keys or inner IP packets. TURN credentials, VK call links, DTLS certificate identity, SRTP traffic keys, and WireGuard peer keys are separate credentials with separate lifecycles.
 
-The exact Rust WireGuard engine is **not selected yet**. Cloudflare BoringTun is a candidate because it is a Rust userspace implementation with Android targets, but its 0.7.1 release has reported session and protocol-conformance concerns that require investigation. Do not pin or integrate it until those reports are triaged and interoperability, fuzzing, and performance tests pass. The old `wireguard-rs` repository is not an acceptable production dependency: its own documentation says it is incomplete and should not be used.
+The exact Rust WireGuard engine is **not selected yet**. Select an implementation only after reviewing its maintenance status, security history, licensing, Android target support, protocol conformance, interoperability, fuzzing results, and measured performance. Do not pin or integrate an implementation until these checks pass.
 
 Initial gateway evaluation should include the mature Linux kernel WireGuard implementation, controlled by the Rust server plane, as a correctness and performance baseline. A Rust userspace gateway may replace it only after equivalent interoperability, security, and throughput evidence.
 
@@ -119,7 +119,6 @@ New adapters must preserve complete record boundaries, expose capabilities and b
 - TURN: RFC 8656, https://www.rfc-editor.org/rfc/rfc8656
 - DTLS-SRTP: RFC 5764, https://www.rfc-editor.org/rfc/rfc5764
 - SRTP AES-GCM: RFC 7714, https://www.rfc-editor.org/rfc/rfc7714
-- WireGuard protocol and implementation references: https://www.wireguard.com/
 - DTLS candidate: https://docs.rs/dimpl/0.9.0/dimpl/
 - SRTP candidate: https://docs.rs/rtc-srtp/0.21.1/rtc_srtp/
 
