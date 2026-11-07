@@ -143,7 +143,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
             };
             entry.worker_id = worker_id;
             entry.last_seen_ns = now_ns;
-            self.entries[index] = Some(entry);
+            self.entries[index] = Slot::Occupied(entry);
             self.metrics.remaps = self.metrics.remaps.saturating_add(1);
             return Ok(DispatchDecision {
                 worker_id,
@@ -261,7 +261,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
             self.metrics.table_full = self.metrics.table_full.saturating_add(1);
             return Err(DispatchError::FlowTableFull);
         };
-        self.entries[index] = Some(Entry {
+        self.entries[index] = Slot::Occupied(Entry {
             key,
             worker_id: preferred_worker_id,
             last_seen_ns: now_ns,
@@ -286,7 +286,7 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
         for _ in 0..scan {
             let index = self.expiry_cursor;
             self.expiry_cursor = (self.expiry_cursor + 1) % CAPACITY;
-            if let Some(entry) = self.entries[index]
+            if let Slot::Occupied(entry) = self.entries[index]
                 && now_ns >= entry.last_seen_ns
                 && now_ns - entry.last_seen_ns >= idle_timeout_ns
             {
