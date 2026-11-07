@@ -12,7 +12,12 @@ mod android {
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::{Mutex, OnceLock};
 
-    use ghoncha_transport_turn::{DatagramReceive, DatagramSocketError, TurnDatagramSocket};
+    use ghoncha_transport_api::MonotonicTime;
+    use ghoncha_transport_turn::{
+        DatagramReceive, DatagramSocketError, TurnDatagramSocket, TurnError, TurnUdpDriver,
+        TurnUdpDriverError, TurnUdpIoProgress, TurnUdpIoReady, TurnUdpRuntime, TurnUdpRuntimeError,
+        TurnUdpRuntimeQueueError, TurnUdpRuntimeServiceError,
+    };
     use jni::EnvUnowned;
     use jni::errors::ThrowRuntimeExAndDefault;
     use jni::jni_mangle;
@@ -57,7 +62,8 @@ mod android {
     unsafe extern "C" {
         fn dup(oldfd: c_int) -> c_int;
         fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
-        fn poll(fds: *mut PollFd, nfds: u32, timeout_ms: c_int) -> c_int;
+        // Android nfds_t is unsigned long; usize matches it on 32-bit and 64-bit ABIs.
+        fn poll(fds: *mut PollFd, nfds: usize, timeout_ms: c_int) -> c_int;
         fn getsockname(fd: c_int, address: *mut c_void, address_len: *mut u32) -> c_int;
         fn getpeername(fd: c_int, address: *mut c_void, address_len: *mut u32) -> c_int;
         fn getsockopt(
@@ -427,15 +433,13 @@ mod android {
                 count += 1;
             }
 
-            let descriptor_count =
-                u32::try_from(count).map_err(|_| AndroidPollerError::CapacityReached)?;
             let timeout_ms = timeout
                 .as_nanos()
                 .div_ceil(1_000_000)
                 .min(c_int::MAX as u128) as c_int;
-            // SAFETY: descriptors contains descriptor_count initialized pollfd
-            // entries; the kernel writes only their revents fields.
-            let result = unsafe { poll(descriptors.as_mut_ptr(), descriptor_count, timeout_ms) };
+            // SAFETY: descriptors contains count initialized pollfd entries;
+            // the kernel writes only their revents fields.
+            let result = unsafe { poll(descriptors.as_mut_ptr(), count, timeout_ms) };
             if result < 0 {
                 let error = std::io::Error::last_os_error();
                 if error.kind() == std::io::ErrorKind::Interrupted {
@@ -578,6 +582,258 @@ mod android {
         close_adopted_udp_socket(handle)
     }
 
+    /// Errors while attaching or servicing an Android TURN UDP allocation.
+    #[derive(Debug)]
+    pub enum AndroidTurnUdpRuntimeError {
+        InvalidHandle,
+        UnknownAdoptedSocket,
+        Driver(TurnError),
+        DriverIo(TurnUdpDriverError),
+        Queue(TurnUdpDriverError),
+        Runtime(TurnUdpRuntimeError),
+        Poller(AndroidPollerError),
+        SocketNotRegistered,
+        SocketFailure,
+    }
+
+    #[derive(Clone, Copy)]
+    struct AndroidAllocationRegistration {
+        id: u16,
+        token: u64,
+    }
+
+    /// Owns Android UDP readiness registrations and the portable TURN runtime.
+    ///
+    /// This type deliberately owns no thread. Its lifecycle owner must call
+    /// wait, poll_due, and service_event on one serialized worker, and must
+    /// stop that worker before dropping this object. TUN and IP routing are
+    /// outside this integration stage.
+    pub struct AndroidTurnUdpRuntime<const CAPACITY: usize> {
+        poller: AndroidUdpPoller<CAPACITY>,
+        runtime: TurnUdpRuntime<AndroidUdpSocket, CAPACITY>,
+        registrations: [Option<AndroidAllocationRegistration>; CAPACITY],
+    }
+
+    impl<const CAPACITY: usize> AndroidTurnUdpRuntime<CAPACITY> {
+        pub fn new() -> Self {
+            Self {
+                poller: AndroidUdpPoller::new(),
+                runtime: TurnUdpRuntime::new(),
+                registrations: [None; CAPACITY],
+            }
+        }
+
+        /// Consumes a previously adopted UDP socket and attaches one TURN driver.
+        /// The adopted handle is used as the opaque poller registration token.
+        pub fn add_allocation(
+            &mut self,
+            allocation_id: u16,
+            adopted_socket_handle: i64,
+            server: SocketAddr,
+            username: &str,
+            password: &str,
+            now: MonotonicTime,
+        ) -> Result<u64, AndroidTurnUdpRuntimeError> {
+            if adopted_socket_handle <= 0 {
+                return Err(AndroidTurnUdpRuntimeError::InvalidHandle);
+            }
+            if self.registrations.iter().all(Option::is_some) {
+                return Err(AndroidTurnUdpRuntimeError::Runtime(
+                    TurnUdpRuntimeError::CapacityReached,
+                ));
+            }
+            let token = u64::try_from(adopted_socket_handle)
+                .map_err(|_| AndroidTurnUdpRuntimeError::InvalidHandle)?;
+            let socket = take_adopted_udp_socket(adopted_socket_handle)
+                .ok_or(AndroidTurnUdpRuntimeError::UnknownAdoptedSocket)?;
+            let driver = TurnUdpDriver::new(socket, server, username, password)
+                .map_err(AndroidTurnUdpRuntimeError::Driver)?;
+            self.runtime
+                .insert(allocation_id, token, driver, now)
+                .map_err(AndroidTurnUdpRuntimeError::Runtime)?;
+
+            let socket = self
+                .runtime
+                .socket(allocation_id)
+                .ok_or(AndroidTurnUdpRuntimeError::SocketNotRegistered)?;
+            if let Err(error) = self.poller.register(token, socket, true, false) {
+                drop(self.runtime.remove(allocation_id));
+                return Err(AndroidTurnUdpRuntimeError::Poller(error));
+            }
+            let slot = self
+                .registrations
+                .iter_mut()
+                .find(|entry| entry.is_none())
+                .ok_or(AndroidTurnUdpRuntimeError::Runtime(
+                    TurnUdpRuntimeError::CapacityReached,
+                ))?;
+            *slot = Some(AndroidAllocationRegistration {
+                id: allocation_id,
+                token,
+            });
+            Ok(token)
+        }
+
+        /// Computes the next bounded poll timeout from the earliest TURN deadline.
+        pub fn wait_duration(
+            &self,
+            now: MonotonicTime,
+            max_wait: std::time::Duration,
+        ) -> std::time::Duration {
+            self.runtime.wait_duration(now, max_wait)
+        }
+
+        /// Waits for level-triggered socket readiness into caller-owned storage.
+        pub fn wait(
+            &self,
+            timeout: std::time::Duration,
+            events: &mut [AndroidPollEvent],
+        ) -> Result<usize, AndroidTurnUdpRuntimeError> {
+            self.poller
+                .wait(timeout, events)
+                .map_err(AndroidTurnUdpRuntimeError::Poller)
+        }
+
+        /// Advances due TURN timers with a caller-supplied work budget.
+        pub fn poll_due<F>(
+            &mut self,
+            now: MonotonicTime,
+            max_drivers: usize,
+            on_result: F,
+        ) -> Result<usize, AndroidTurnUdpRuntimeError>
+        where
+            F: FnMut(
+                u16,
+                u64,
+                Result<
+                    ghoncha_transport_turn::TurnUdpControlPoll,
+                    ghoncha_transport_turn::TurnUdpDriverError,
+                >,
+            ),
+        {
+            let serviced = self.runtime.poll_due(now, max_drivers, on_result);
+            self.refresh_write_interests()?;
+            Ok(serviced)
+        }
+
+        /// Dispatches one poller event to its owning TURN driver.
+        pub fn service_event<F>(
+            &mut self,
+            event: AndroidPollEvent,
+            now: MonotonicTime,
+            receive_buffer: &mut [u8],
+            on_datagram: F,
+        ) -> Result<TurnUdpIoProgress, AndroidTurnUdpRuntimeError>
+        where
+            F: for<'a> FnMut(ghoncha_transport_turn::TurnReceiveResult<'a>),
+        {
+            if event.error || event.hangup || event.invalid {
+                return Err(AndroidTurnUdpRuntimeError::SocketFailure);
+            }
+            let progress = self
+                .runtime
+                .service_ready(
+                    event.token,
+                    TurnUdpIoReady {
+                        readable: event.readable,
+                        writable: event.writable,
+                        max_receive_datagrams: 8,
+                        max_send_datagrams: 8,
+                    },
+                    now,
+                    receive_buffer,
+                    on_datagram,
+                )
+                .map_err(map_runtime_service_error)?;
+            self.refresh_write_interests()?;
+            Ok(progress)
+        }
+
+        /// Queues peer payload on an allocation selected by the flow manager.
+        pub fn queue_peer_data(
+            &mut self,
+            allocation_id: u16,
+            peer: SocketAddr,
+            payload: &[u8],
+            now: MonotonicTime,
+            encoded_buffer: &mut [u8],
+        ) -> Result<usize, AndroidTurnUdpRuntimeError> {
+            let queued = self
+                .runtime
+                .queue_peer_data(allocation_id, peer, payload, now, encoded_buffer)
+                .map_err(map_runtime_queue_error)?;
+            self.refresh_write_interests()?;
+            Ok(queued)
+        }
+
+        /// Unregisters the OS poller token before dropping the driver/socket.
+        pub fn remove_allocation(
+            &mut self,
+            allocation_id: u16,
+        ) -> Result<(), AndroidTurnUdpRuntimeError> {
+            let registration = self
+                .registrations
+                .iter()
+                .flatten()
+                .find(|entry| entry.id == allocation_id)
+                .copied()
+                .ok_or(AndroidTurnUdpRuntimeError::SocketNotRegistered)?;
+            self.poller
+                .unregister(registration.token)
+                .map_err(AndroidTurnUdpRuntimeError::Poller)?;
+            drop(
+                self.runtime
+                    .remove(allocation_id)
+                    .map_err(AndroidTurnUdpRuntimeError::Runtime)?,
+            );
+            if let Some(slot) = self
+                .registrations
+                .iter_mut()
+                .find(|entry| entry.is_some_and(|entry| entry.id == allocation_id))
+            {
+                *slot = None;
+            }
+            Ok(())
+        }
+
+        fn refresh_write_interests(&mut self) -> Result<(), AndroidTurnUdpRuntimeError> {
+            for registration in self.registrations.iter().flatten() {
+                let writable = self
+                    .runtime
+                    .has_pending_output(registration.token)
+                    .ok_or(AndroidTurnUdpRuntimeError::SocketNotRegistered)?;
+                self.poller
+                    .update(registration.token, true, writable)
+                    .map_err(AndroidTurnUdpRuntimeError::Poller)?;
+            }
+            Ok(())
+        }
+    }
+
+    impl<const CAPACITY: usize> Default for AndroidTurnUdpRuntime<CAPACITY> {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    fn map_runtime_service_error(error: TurnUdpRuntimeServiceError) -> AndroidTurnUdpRuntimeError {
+        match error {
+            TurnUdpRuntimeServiceError::Runtime(error) => {
+                AndroidTurnUdpRuntimeError::Runtime(error)
+            }
+            TurnUdpRuntimeServiceError::Driver(error) => {
+                AndroidTurnUdpRuntimeError::DriverIo(error)
+            }
+        }
+    }
+
+    fn map_runtime_queue_error(error: TurnUdpRuntimeQueueError) -> AndroidTurnUdpRuntimeError {
+        match error {
+            TurnUdpRuntimeQueueError::Runtime(error) => AndroidTurnUdpRuntimeError::Runtime(error),
+            TurnUdpRuntimeQueueError::Driver(error) => AndroidTurnUdpRuntimeError::Queue(error),
+        }
+    }
+
     /// Builds a Rustls client configuration backed by Android's system trust manager.
     ///
     /// Must only be called after initialization completed successfully. The returned
@@ -599,7 +855,7 @@ mod android {
 
 #[cfg(target_os = "android")]
 pub use android::{
-    AndroidPollEvent, AndroidPollerError, AndroidSocketAdoptionError, AndroidUdpPoller,
-    AndroidUdpSocket, platform_tls_client_config, take_adopted_udp_socket, take_android_udp_socket,
-    take_udp_socket,
+    AndroidPollEvent, AndroidPollerError, AndroidSocketAdoptionError, AndroidTurnUdpRuntime,
+    AndroidTurnUdpRuntimeError, AndroidUdpPoller, AndroidUdpSocket, platform_tls_client_config,
+    take_adopted_udp_socket, take_android_udp_socket, take_udp_socket,
 };
