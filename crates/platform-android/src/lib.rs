@@ -4,10 +4,14 @@
 
 #[cfg(target_os = "android")]
 mod android {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use jni::EnvUnowned;
     use jni::errors::ThrowRuntimeExAndDefault;
     use jni::jni_mangle;
     use jni::objects::{JClass, JObject};
+
+    static ANDROID_VERIFIER_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
     /// Initializes the Android system-trust verifier before any TLS connection starts.
     ///
@@ -20,8 +24,30 @@ mod android {
         _class: JClass<'caller>,
         context: JObject<'caller>,
     ) {
-        unowned_env
-            .with_env(|env| rustls_platform_verifier::android::init_with_env(env, context))
-            .resolve::<ThrowRuntimeExAndDefault>();
+        let result = unowned_env.with_env(|env| {
+            rustls_platform_verifier::android::init_with_env(env, context)
+        });
+        if result.is_ok() {
+            ANDROID_VERIFIER_INITIALIZED.store(true, Ordering::Release);
+        }
+        result.resolve::<ThrowRuntimeExAndDefault>();
+    }
+
+    /// Builds a Rustls client configuration backed by Android's system trust manager.
+    ///
+    /// Must only be called after initialization completed successfully. The returned
+    /// configuration uses the selected Rustls crypto provider and never enables 0-RTT.
+    pub fn platform_tls_client_config() -> Result<rustls::ClientConfig, rustls::Error> {
+        if !ANDROID_VERIFIER_INITIALIZED.load(Ordering::Acquire) {
+            return Err(rustls::Error::General(
+                "Android platform verifier is not initialized".to_owned(),
+            ));
+        }
+
+        use rustls_platform_verifier::ConfigVerifierExt;
+
+        let mut config = rustls::ClientConfig::with_platform_verifier()?;
+        config.enable_early_data = false;
+        Ok(config)
     }
 }
