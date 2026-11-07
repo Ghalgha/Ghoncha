@@ -90,14 +90,26 @@ internal object VkCallsResponseParser {
             } catch (_: Exception) {
                 return null
             }
-            if (
-                uri.scheme?.lowercase() !in setOf("turn", "turns") ||
-                uri.host.isNullOrBlank() ||
-                uri.port !in -1..65535 ||
-                uri.rawUserInfo != null
-            ) {
+            val scheme = uri.scheme?.lowercase()
+            if (scheme !in setOf("turn", "turns") || uri.rawUserInfo != null) return null
+
+            // RFC 7065 TURN URIs are commonly opaque: turn:host:port?transport=udp.
+            // Parse the authority separately instead of relying on URI.host.
+            val authority = if (uri.isOpaque) {
+                uri.rawSchemeSpecificPart.substringBefore('?')
+            } else {
+                uri.rawAuthority ?: return null
+            }
+            val endpoint = try {
+                URI("https://$authority")
+            } catch (_: Exception) {
                 return null
             }
+            if (
+                endpoint.host.isNullOrBlank() ||
+                endpoint.userInfo != null ||
+                endpoint.port !in -1..65535
+            ) return null
             result += value
         }
         return result
