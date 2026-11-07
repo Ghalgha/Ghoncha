@@ -735,3 +735,43 @@ Ghoncha в целом не считается полноценным VPN до п
 - В workflow pull_request branch filter добавлена ветка PR12, чтобы дальнейшие изменения PR, нацеленного на main, получали CI.
 - PR №10 остаётся open, HEAD 83e7062658f7964891ea8b2956f44556d7c45362; CI на этом HEAD не обнаружен. Не объявлять готовым к merge. Его Android TUN lifecycle и изменения crates/platform-android/src/lib.rs требуют аккуратной интеграции с уже слитым TURN runtime и PR12, без перезаписи изменений соседней ветки.
 - Следующая очередность: завершить CI/review PR12 и запросить отдельное разрешение на его merge, затем перенести PR10 на актуальную main с сохранением runtime-кода и выполнить полный CI. После стабилизации этих оснований реализовать service-owned worker с cancellation/join, затем TUN readiness и IP packet router.
+
+## 25. Повторный аудит CSQTT и решения для Ghoncha (2026-11-07)
+
+Проверены актуальная ветка `Afteroid/csqttr` (HEAD `84a2ce84dd4ac0716ceabd1b9a9ae455e6e86806`) и форк `SanityProtocol/csqttr` (HEAD `001caa48e342caac8758db8ed4d12305faea6954`). SanityProtocol — форк Afteroid, а не независимая реализация. На проверенных HEAD совпадают blob SHA критичных файлов `shared/dtls.rs`, `rust-client/turn_core.rs`, `rust-client/obfs.rs`, `rust-server/protocol.rs` и `rust-server/dataplane.rs`; отличия есть в session/turn/worker и интеграционных слоях. Последние коммиты Afteroid 7 ноября относятся преимущественно к сборке серверных бинарников и provenance, а не к изменению DTLS-SRTP wire protocol. Серверный provenance указывает версию 2.5.3, клиентский — 2.5.0. В `PORT.md` остаётся открытая P0-проверка wire matrix, store round trip и реальных phone legs.
+
+### 25.1. DTLS-SRTP и классификация RTP
+
+- В режиме DTLS-SRTP DTLS handshake выполняется для установления ассоциации и получения SRTP keying material; после него пользовательские media datagrams передаются как RTP/SRTP. DTLS handshake не повторяется перед каждым SRTP-пакетом.
+- Первый байт `0x80` означает RTP version 2 при нулевых P/X/CC битах и является обычным началом корректного RTP-заголовка. Диапазон `0x80..0xBF` сам по себе не доказывает отсутствие предшествующего DTLS handshake и не классифицирует пакет как orphan SRTP. Для такого вывода необходимы состояние потока и подтверждённая связь с DTLS-SRTP association.
+- Следовательно, не вводить packet-level правило «каждый SRTP packet должен содержать/сопровождаться DTLS handshake». Состояние handshake и состояние последующего SRTP data plane должны учитываться раздельно.
+
+### 25.2. Результаты source-level проверки
+
+- Клиентский call site вызывает `DtlsClientHandshake::new()` без `pin_fingerprint()`; в DTLS реализации pin опционален. Проверка ECDSA подписи ServerKeyExchange подтверждает владение ключом предъявленного сертификата, но без заранее аутентифицированной привязки не подтверждает ожидаемую идентичность gateway.
+- DTLS `RecordProtector::protect` маскирует счётчик 48-bit record sequence по модулю, а не завершает association/запускает rekey до исчерпания пространства sequence. GCM nonce reuse при переполнении недопустим.
+- Парсеры DTLS record/handshake сообщений завершают цикл при остатке короче заголовка; trailing partial header должен отклоняться, а не молча игнорироваться.
+- Клиент объявляет несколько SRTP profiles, начиная с AES128-CM-SHA1-80. Сервер выбирает первый общий профиль из того же локального списка; key exporter фиксирован на 60 bytes и 14-byte master salts, а data cipher использует AES-CTR/HMAC-SHA1. Не считать AEAD-GCM profile реально поддержанным только на основании его присутствия в ClientHello.
+- Режим AUTO после ошибки DTLS-SRTP переходит на WRAP-SRTP. Это downgrade криптографического профиля; Ghoncha не должен повторять такое поведение. Любой fallback обязан сохранять эквивалентную аутентификацию и защиту внутреннего VPN.
+- TURN core реализует собственные retry/state machine, nonce handling и отдельные deadlines для allocation/permission/channel. Также использует нестандартный STUN attribute `0x8021` со значением `fc 09 b4 6f`. Это VK/CSQTT-specific compatibility detail, не стандартный TURN атрибут; не добавлять его в Ghoncha без подтверждённого packet capture и interoperability test.
+- CSQTT profile использует allocation lifetime 600 s, allocation refresh 300 s, permission/channel maintenance 175 s и keepalive 10 s. Не копировать интервалы: они могут быть частью конкретной PjNATH/VK совместимости и требуют измерений на целевой сети и устройстве.
+- Outbound writer сочетает bounded ArrayQueue/Notify с коротким 50 µs sleep loop после writable readiness. Для Ghoncha предпочтительнее уже реализованный event-driven poller без busy polling.
+- В diagnostics feature серверный `DpiFrame` сохраняет password и session salt в полях записи/трансляции. Даже если диагностический listener привязан к localhost и feature выключена по умолчанию, это не образец для Ghoncha: секреты не должны попадать в diagnostics, журналы или метрики.
+- `PORT.md` описывает конкретную регрессию, где pinning малых UDP-пакетов на один stream снижал bulk throughput. Использовать это как тестовый сценарий для будущего packet router: смешанные small-UDP и bulk flows, несколько одновременных потоков, per-flow affinity и измерение goodput. Не копировать частные пороги/эвристики без собственных измерений.
+
+### 25.3. Что использовать как архитектурный ориентир
+
+- Явная отмена сессий через cancellation token, RAII-регистрация worker/flow, ограниченный graceful-shutdown timeout и гарантированный join/abort при teardown.
+- Bounded queues, packet pool/SPSC ring и повторное использование буферов — только там, где они уменьшают allocations/copies без ухудшения backpressure и correctness.
+- TURN state machine с ограниченными nonce/auth retries, отдельными transaction deadlines и явным retirement allocation при фатальной ошибке.
+- Сборка native/server artifacts с provenance manifest: исходный commit, Cargo.lock/input hashes, target/ABI, размер и SHA-256 каждого бинарника.
+- Диагностика через агрегированные counters/latency histograms без хранения пользовательского payload, credentials, session salts или ключевого материала.
+
+### 25.4. Решения для Ghoncha
+
+1. Не переносить custom DTLS, SRTP, WRAP/obfuscation crypto или server dataplane code. Внешние репозитории распространяются по PolyForm Noncommercial License 1.0.0 с обязательными notices и отдельной письменной лицензией для коммерческого использования; использовать только независимые архитектурные идеи, а не копировать исходный код.
+2. Сохранить текущие portable Sans-I/O TURN core, bounded runtime ownership, event-driven Android poller и flow-affinity model. Не заменять их более сложной task/thread-per-allocation архитектурой без измеримого выигрыша.
+3. В следующем service-owned worker этапе применить cancellation/join, RAII cleanup и bounded graceful shutdown. Не использовать короткие sleep loops и не создавать worker на каждый пакет/allocation.
+4. В packet-router этапе добавить throughput regression tests для смешанных small-UDP/bulk flows, нескольких allocations и сетевого handover.
+5. После стабилизации native packaging добавить provenance/SHA-256 manifest для артефактов.
+6. DTLS-SRTP/SRTP реализовывать только после подтверждения реального VK Calls media profile и с maintained implementation, обязательной проверкой gateway identity, строгой profile negotiation, replay protection и запретом silent downgrade.
