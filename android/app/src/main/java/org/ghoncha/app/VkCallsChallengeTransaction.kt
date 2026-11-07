@@ -130,7 +130,7 @@ internal class VkCallsChallengeSubmission(
             "is_sound_captcha" to "0",
             "success_token" to response,
             "captcha_ts" to captchaTs.orEmpty(),
-            "captcha_attempt" to captchaAttempt?.takeIf { it.isNotBlank() } ?: "1",
+            "captcha_attempt" to (captchaAttempt?.takeIf { it.isNotBlank() } ?: "1"),
         )
         val suffix = fields.joinToString("&") { (key, value) ->
             "${URLEncoder.encode(key, Charsets.UTF_8.name())}=${URLEncoder.encode(value, Charsets.UTF_8.name())}"
