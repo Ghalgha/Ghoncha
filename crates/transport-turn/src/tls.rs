@@ -862,8 +862,7 @@ mod tests {
     fn unexpected_tcp_eof_without_tls_close_notify_fails_closed() {
         let mut stream = mock_stream(usize::MAX);
         stream.eof = true;
-        let mut socket =
-            TlsStreamSocket::new(stream, client_config(), server_name()).unwrap();
+        let mut socket = TlsStreamSocket::new(stream, client_config(), server_name()).unwrap();
 
         assert_eq!(socket.read(&mut [0_u8; 64]), Err(TurnStreamIoError::Failed));
         assert_eq!(socket.read(&mut [0_u8; 64]), Err(TurnStreamIoError::Failed));
