@@ -41,12 +41,14 @@ class UnderlayDatagramSocketFactoryTest {
             assertEquals(3478, prepared.serverAddress.port)
             assertEquals(17L, prepared.networkGeneration)
             assertTrue(prepared.socket.isBound)
+            assertFalse(prepared.channel.isBlocking)
+            assertTrue(prepared.localAddress.address is java.net.Inet4Address)
             assertFalse(prepared.socket.isClosed)
             assertFalse(prepared.socket.isConnected)
             assertTrue(prepared.localAddress.port in 1..65535)
             assertEquals(prepared.localAddress, prepared.socket.localSocketAddress)
         } finally {
-            prepared.socket.close()
+            prepared.channel.close()
         }
     }
 
