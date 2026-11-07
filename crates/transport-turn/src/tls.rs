@@ -621,6 +621,34 @@ mod tests {
     }
 
     #[test]
+    fn turn_tcp_driver_uses_tls_underlay_without_sending_cleartext() {
+        let socket =
+            TlsStreamSocket::new(mock_stream(usize::MAX), client_config(), server_name()).unwrap();
+        let server = "198.51.100.1:443".parse().unwrap();
+        let mut driver =
+            crate::TurnTcpDriver::<_, 2, 4096, 8192>::new(socket, server, "test-user", "test-password")
+                .unwrap();
+
+        let poll = driver
+            .poll_control_with_deadline(crate::MonotonicTime(1))
+            .unwrap();
+        assert!(poll.queued_control);
+        assert_eq!(
+            driver.flush_one().unwrap(),
+            crate::TurnTcpFlushResult::WouldBlock
+        );
+
+        let wire = &driver.socket().socket().writes;
+        assert!(!wire.is_empty());
+        assert!(
+            !wire
+                .windows(b"TURN Allocate".len())
+                .any(|part| part == b"TURN Allocate")
+        );
+        assert!(driver.queued_bytes() > 0);
+    }
+
+    #[test]
     fn tls_socket_retains_partial_handshake_ciphertext() {
         let mut socket =
             TlsStreamSocket::new(mock_stream(1), client_config(), server_name()).unwrap();
