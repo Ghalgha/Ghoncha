@@ -77,6 +77,12 @@ jobs:
         with:
           gradle-version: "9.5.0"
 
+      - name: Run Android JVM unit tests
+        run: gradle --no-daemon -p android testDebugUnitTest
+        env:
+          ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/28.2.13676358
+          ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/28.2.13676358
+
       - name: Build debug and release APKs
         run: gradle --no-daemon -p android assembleDebug assembleRelease
         env:
