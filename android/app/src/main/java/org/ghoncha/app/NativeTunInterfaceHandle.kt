@@ -10,15 +10,28 @@ import java.util.concurrent.atomic.AtomicLong
  * This handle does not mean that packets are being processed. The native
  * packet runtime must explicitly claim the descriptor before traffic can flow.
  */
-internal class NativeTunInterfaceHandle private constructor(handle: Long) : Closeable {
+internal class NativeTunInterfaceHandle internal constructor(
+    handle: Long,
+    private val closeNativeHandle: (Long) -> Boolean = NativeBootstrap::closeTunInterface,
+) : Closeable {
     private val nativeHandle = AtomicLong(handle.also {
         require(it > 0) { "Native TUN handle must be positive" }
     })
 
+    /**
+     * Releases the token to a native runtime entry point. The caller must pass
+     * it to that entry point exactly once; the Kotlin wrapper becomes inert.
+     */
+    fun transferToNativeRuntime(): Long {
+        val handle = nativeHandle.getAndSet(0)
+        check(handle > 0) { "Native TUN descriptor was already transferred or closed" }
+        return handle
+    }
+
     override fun close() {
         val handle = nativeHandle.getAndSet(0)
         if (handle != 0L) {
-            check(NativeBootstrap.closeTunInterface(handle)) {
+            check(closeNativeHandle(handle)) {
                 "Native TUN descriptor was already transferred or closed"
             }
         }
