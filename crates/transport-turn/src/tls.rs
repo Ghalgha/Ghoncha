@@ -952,6 +952,20 @@ mod tests {
         let mut input = std::io::Cursor::new(&client_finished);
         assert_eq!(server.read_tls(&mut input).unwrap(), client_finished.len());
         server.process_new_packets().unwrap();
+
+        // Rustls may emit post-handshake TLS 1.3 tickets after processing
+        // the client's Finished. Drive that server output back through the
+        // adapter before asserting that application data is ready.
+        if server.wants_write() {
+            let mut post_handshake = std::vec::Vec::new();
+            server.write_tls(&mut post_handshake).unwrap();
+            assert!(!post_handshake.is_empty());
+            socket.socket.read_data.extend_from_slice(&post_handshake);
+            assert_eq!(
+                socket.read(&mut [0_u8; 64]),
+                Err(TurnStreamIoError::WouldBlock)
+            );
+        }
         assert!(socket.tls().application_data_ready());
 
         let request = b"TURN Allocate";
