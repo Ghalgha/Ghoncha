@@ -812,6 +812,11 @@ pub struct TurnUdpIoProgress {
 #[derive(Debug)]
 pub struct TurnUdpControlPoll {
     pub protocol: TurnPollRet,
+    /// Absolute monotonic deadline for the next protocol timer, if any.
+    ///
+    /// Platform reactors should schedule this directly and avoid periodic
+    /// polling. Socket readiness may wake the driver earlier.
+    pub next_deadline: Option<MonotonicTime>,
     pub queued_control: bool,
     pub queue_blocked: bool,
 }
@@ -894,6 +899,14 @@ impl<
     ) -> Result<TurnUdpControlPoll, TurnUdpDriverError> {
         self.ensure_active()?;
         let protocol = self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
+        let next_deadline = match &protocol {
+            TurnPollRet::WaitUntil(deadline) => {
+                u64::try_from(deadline.as_nanos()).ok().map(MonotonicTime)
+            }
+            TurnPollRet::AllocateTcpSocket { .. }
+            | TurnPollRet::TcpClose { .. }
+            | TurnPollRet::Closed => None,
+        };
 
         match self.queues.ensure_control_capacity(MAX_DATAGRAM) {
             Ok(()) => {}
@@ -901,6 +914,7 @@ impl<
             | Err(DatagramQueueError::ByteCapacityReached { .. }) => {
                 return Ok(TurnUdpControlPoll {
                     protocol,
+                    next_deadline,
                     queued_control: false,
                     queue_blocked: true,
                 });
@@ -915,6 +929,7 @@ impl<
         else {
             return Ok(TurnUdpControlPoll {
                 protocol,
+                next_deadline,
                 queued_control: false,
                 queue_blocked: false,
             });
@@ -924,6 +939,7 @@ impl<
             .map_err(TurnUdpDriverError::Queue)?;
         Ok(TurnUdpControlPoll {
             protocol,
+            next_deadline,
             queued_control: true,
             queue_blocked: false,
         })
