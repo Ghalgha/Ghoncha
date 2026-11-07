@@ -276,7 +276,6 @@ impl Write for BoundedVecWriter<'_> {
     }
 }
 
-
 /// A nonblocking TLS stream adapter for an already-connected underlay socket.
 ///
 /// It implements the same byte-stream contract as the raw TURN TCP socket, so
@@ -436,9 +435,10 @@ impl<S: TurnStreamSocket> TurnStreamSocket for TlsStreamSocket<S> {
             };
         }
 
-        let progress = match self.tls.feed_ciphertext(
-            &self.ciphertext_input[self.input_offset..self.input_len],
-        ) {
+        let progress = match self
+            .tls
+            .feed_ciphertext(&self.ciphertext_input[self.input_offset..self.input_len])
+        {
             Ok(progress) => progress,
             Err(_) => {
                 self.retired = true;
@@ -495,7 +495,6 @@ impl<S: TurnStreamSocket> TurnStreamSocket for TlsStreamSocket<S> {
         Ok(accepted)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -563,6 +562,77 @@ mod tests {
             engine.feed_ciphertext(&input),
             Err(TlsEngineError::CiphertextInputTooLarge { .. })
         ));
+    }
+
+    #[derive(Debug)]
+    struct MockStream {
+        local: core::net::SocketAddr,
+        peer: core::net::SocketAddr,
+        writes: std::vec::Vec<u8>,
+        write_limit: usize,
+    }
+
+    impl TurnStreamSocket for MockStream {
+        fn local_addr(&self) -> core::net::SocketAddr {
+            self.local
+        }
+
+        fn peer_addr(&self) -> core::net::SocketAddr {
+            self.peer
+        }
+
+        fn read(&mut self, _buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
+            Err(TurnStreamIoError::WouldBlock)
+        }
+
+        fn write(&mut self, bytes: &[u8]) -> Result<usize, TurnStreamIoError> {
+            let written = bytes.len().min(self.write_limit);
+            self.writes.extend_from_slice(&bytes[..written]);
+            Ok(written)
+        }
+    }
+
+    fn mock_stream(write_limit: usize) -> MockStream {
+        MockStream {
+            local: "192.0.2.10:40000".parse().unwrap(),
+            peer: "198.51.100.1:443".parse().unwrap(),
+            writes: std::vec::Vec::new(),
+            write_limit,
+        }
+    }
+
+    #[test]
+    fn tls_socket_sends_client_hello_before_accepting_turn_plaintext() {
+        let mut socket =
+            TlsStreamSocket::new(mock_stream(usize::MAX), client_config(), server_name()).unwrap();
+
+        assert_eq!(
+            socket.write(b"TURN Allocate"),
+            Err(TurnStreamIoError::WouldBlock)
+        );
+        let wire = &socket.socket().writes;
+        assert!(!wire.is_empty());
+        assert!(!wire.windows(b"TURN Allocate".len()).any(|part| part == b"TURN Allocate"));
+        assert!(socket.tls().is_handshaking());
+    }
+
+    #[test]
+    fn tls_socket_retains_partial_handshake_ciphertext() {
+        let mut socket =
+            TlsStreamSocket::new(mock_stream(1), client_config(), server_name()).unwrap();
+
+        assert_eq!(
+            socket.write(b"TURN Allocate"),
+            Err(TurnStreamIoError::WouldBlock)
+        );
+        assert_eq!(socket.socket().writes.len(), 1);
+
+        let mut attempts = 0;
+        while !socket.flush_pending_ciphertext().unwrap() {
+            attempts += 1;
+            assert!(attempts < 4096);
+        }
+        assert!(socket.socket().writes.len() > 1);
     }
 
     #[test]
