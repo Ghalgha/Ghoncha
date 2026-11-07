@@ -774,3 +774,31 @@ Ghoncha в целом не считается полноценным VPN до п
 4. В packet-router этапе добавить throughput regression tests для смешанных small-UDP/bulk flows, нескольких allocations и сетевого handover.
 5. После стабилизации native packaging добавить provenance/SHA-256 manifest для артефактов.
 6. DTLS-SRTP/SRTP реализовывать только после подтверждения реального VK Calls media profile и с maintained implementation, обязательной проверкой gateway identity, строгой profile negotiation, replay protection и запретом silent downgrade.
+
+## 26. LaLune TCP/TLS transport audit (2026-11-07)
+
+Проверены `Endlad2/LaLune` main HEAD `7c6a53f567fc9f12edd92d0193fc87c94dfabc8d` и отдельное ядро `Endlad2/csqtt-core` main HEAD `181a0d9f162bb8040c255496af0aeb8e87c355494`. В публичных деревьях, README, кодовом поиске и релизных заметках не найдено названия/модуля `Gooby`, `Guby` или `Goby`. LaLune UI exposes TURN transport UDP/TCP; core's `TurnTransportMode::TcpTls` accepts `tcp`, `tcp_tls`, `tcp-tls`, `tcp/tls`. Therefore the likely relevant feature is TURN over TCP/TLS, but the user's name "Gooby" is unverified and must not be asserted as a protocol or library.
+
+### 26.1. Что реализовано в LaLune / csqtt-core
+
+- `rust-client/turn_endpoint.rs`: parses `turn:` / `turns:` endpoints and transport URI parameters. TCP mode maps `turn:` endpoints to raw TCP; `turns:` endpoints to TLS; UDP/TCP scheme mismatches and duplicate transport parameters are rejected.
+- `rust-client/turn_stream.rs`: Tokio TCP connect timeout 10 s; TCP_NODELAY; send buffer 32 KiB; TCP keepalive 120 s / 30 s; optional Rustls TLS connector with web PKI roots and hostname verification; bounded control/data queues (32/64); separate stream writer task; incremental TURN control/ChannelData parser with hard frame bounds and TCP padding handling.
+- `rust-client/turn.rs`: chooses Datagram vs Stream control transport; separate UDP and stream driver paths; bounded deadlines for connect, allocation, control and cleanup. Stream writer prioritizes control messages, then multiplexes peer data.
+- LaLune settings expose UDP/TCP choice and default to UDP. CSQTT upstream release notes describe TCP/TLS as experimental fallback for networks restricting UDP, not as the default high-performance mode. Do not assume TCP/TLS is universally faster or more censorship-resistant.
+
+### 26.2. Existing Ghoncha foundation
+
+- Ghoncha already has `crates/transport-turn/src/tcp.rs`: Sans-I/O `TurnTcpEngine`, TURN-over-TCP client adapter, explicit UDP relay allocation semantics (not RFC 6062 TCP relay), bounded input chunks, parser-drain contract, `TurnTcpSendQueue` with retained unwritten suffix for partial TCP writes, and TCP integration roundtrip tests.
+- Ghoncha already has `crates/transport-turn/src/tls.rs`: Sans-I/O Rustls client engine, bounded ciphertext/plaintext, explicit handshake readiness, no TLS 0-RTT, verified plaintext only, caller-driven socket readiness, `TlsStreamSocket`.
+- These are protocol/adapter foundations, not a complete Android production TCP/TLS transport. Current Android runtime integration is UDP-only (`AndroidTurnUdpRuntime` / `AndroidUdpPoller`). There is no equivalent integrated multi-allocation `TurnTcpRuntime`, Android protected TCP socket adoption/poller, or Android TLS configuration/server-name lifecycle yet.
+- Ghoncha's separation of TURN state, TLS state, socket ownership and poller readiness is more suitable for its portable architecture than copying a Tokio task-per-stream design. Preserve Sans-I/O/event-driven ownership and bounded partial-write queues.
+
+### 26.3. Next implementation plan
+
+1. Finish and validate the UDP Android runtime/PR12 and TUN lifecycle/PR10 before adding another transport integration layer.
+2. Add a portable multi-allocation `TurnTcpRuntime` around the existing `TurnTcpDriver`, using stable opaque tokens, bounded per-call work, earliest deadlines, explicit partial-write retention, and no task/thread per allocation.
+3. Add Android protected TCP socket adoption: bind to selected Network and call `VpnService.protect()` before connect; validate stream socket type, connected peer/local tuple, nonblocking mode, descriptor ownership and close lifecycle.
+4. Integrate TLS as a separate optional adapter with DNS hostname verification, maintained trust roots, bounded handshake deadline/output, no early data, and explicit writable/readable interest. Raw TCP and TLS must remain distinct configuration choices; never silently downgrade TLS to plaintext TCP.
+5. Add loopback interoperability tests for split/coalesced STUN and ChannelData, partial writes, WouldBlock, TLS handshake fragmentation, certificate/hostname failures, EOF/reset, cancellation, and bounded shutdown.
+6. Benchmark UDP vs TCP vs TLS over controlled RTT/loss/bandwidth profiles and on Android devices: goodput, p50/p95 latency, head-of-line blocking, CPU, wakeups, memory, and battery. Keep UDP default unless measurements and target-network compatibility justify another profile.
+7. Do not copy LaLune/csqtt-core source. LaLune README states PolyForm Noncommercial License 1.0.0; use only independently designed protocol and lifecycle ideas.
