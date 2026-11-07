@@ -1752,6 +1752,26 @@ impl<const CAPACITY: usize> TurnUdpReactor<CAPACITY> {
         }
     }
 
+    /// Computes a bounded wait for the platform readiness poller.
+    ///
+    /// Ready work returns zero; an armed timer shortens the caller's maximum
+    /// wait; an idle reactor uses that maximum. Re-read the monotonic clock
+    /// after the OS wait before servicing timers.
+    pub fn wait_duration(
+        &self,
+        now: MonotonicTime,
+        max_wait: core::time::Duration,
+    ) -> core::time::Duration {
+        match self.next_wakeup_at(now) {
+            TurnReactorWakeup::Ready => core::time::Duration::ZERO,
+            TurnReactorWakeup::Deadline(deadline) => {
+                core::time::Duration::from_nanos(deadline.0.saturating_sub(now.0))
+                    .min(max_wait)
+            }
+            TurnReactorWakeup::Idle => max_wait,
+        }
+    }
+
     /// Returns the earliest absolute monotonic deadline, if any.
     pub fn next_deadline(&self) -> Option<MonotonicTime> {
         self.slots
@@ -1852,6 +1872,44 @@ mod reactor_tests {
         assert_eq!(
             reactor.next_wakeup_at(MonotonicTime(101)),
             TurnReactorWakeup::Idle
+        );
+    }
+
+    #[test]
+    fn reactor_wait_duration_is_bounded_by_ready_work_and_deadlines() {
+        let mut reactor = TurnUdpReactor::<2>::new();
+        let max_wait = core::time::Duration::from_secs(5);
+
+        assert_eq!(
+            reactor.wait_duration(MonotonicTime(10), max_wait),
+            max_wait
+        );
+
+        reactor.register(1).unwrap();
+        reactor.schedule(1, MonotonicTime(2_000_000_010)).unwrap();
+        assert_eq!(
+            reactor.wait_duration(MonotonicTime(10), max_wait),
+            core::time::Duration::from_secs(2)
+        );
+        assert_eq!(
+            reactor.wait_duration(
+                MonotonicTime(1_500_000_010),
+                core::time::Duration::from_secs(10)
+            ),
+            core::time::Duration::from_millis(500)
+        );
+        assert_eq!(
+            reactor.wait_duration(
+                MonotonicTime(2_000_000_010),
+                core::time::Duration::from_secs(10)
+            ),
+            core::time::Duration::ZERO
+        );
+
+        reactor.wake(1).unwrap();
+        assert_eq!(
+            reactor.wait_duration(MonotonicTime(10), max_wait),
+            core::time::Duration::ZERO
         );
     }
 
