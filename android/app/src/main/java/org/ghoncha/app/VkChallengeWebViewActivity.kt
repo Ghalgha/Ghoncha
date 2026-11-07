@@ -33,7 +33,7 @@ import org.json.JSONObject
  * No fingerprint spoofing, synthetic pointer events, or automated gestures
  * are performed here.
  */
-data class VkChallengeResult(val challengeId: Long, val successToken: String)
+class VkChallengeResult(val challengeId: Long, val successToken: String)
 
 class VkChallengeWebViewActivity : Activity() {
     private lateinit var webView: WebView
