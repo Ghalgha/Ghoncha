@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, work/android-protected-udp-preparation, work/android-underlay-network-monitor-main]
+    branches: [main, work/android-protected-udp-preparation, work/android-underlay-network-monitor-main, work/native-turn-runtime-core]
   merge_group:
   workflow_dispatch:
 
