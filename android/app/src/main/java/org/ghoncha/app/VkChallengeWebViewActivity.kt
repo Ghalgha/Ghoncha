@@ -201,16 +201,17 @@ class VkChallengeWebViewActivity : Activity() {
                 BRIDGE_NAME,
                 ALLOWED_ORIGIN_RULES,
             ) { view, message, sourceOrigin, _, _ ->
+                val messageData = message.data ?: return@addWebMessageListener
                 if (
                     view !== webView ||
                     !isAllowedOrigin(sourceOrigin) ||
-                    message.data.length > MAX_BRIDGE_MESSAGE_LENGTH
+                    messageData.length > MAX_BRIDGE_MESSAGE_LENGTH
                 ) {
                     return@addWebMessageListener
                 }
 
                 val token = try {
-                    val payload = JSONObject(message.data)
+                    val payload = JSONObject(messageData)
                     if (payload.optString("type") != BRIDGE_MESSAGE_TYPE) {
                         null
                     } else {
