@@ -925,7 +925,6 @@ impl TurnStreamSocket for std::net::TcpStream {
     }
 
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
-        use std::io::Read;
         std::io::Read::read(self, buffer).map_err(|error| {
             if error.kind() == std::io::ErrorKind::WouldBlock {
                 TurnStreamIoError::WouldBlock
@@ -936,7 +935,6 @@ impl TurnStreamSocket for std::net::TcpStream {
     }
 
     fn write(&mut self, bytes: &[u8]) -> Result<usize, TurnStreamIoError> {
-        use std::io::Write;
         std::io::Write::write(self, bytes).map_err(|error| {
             if error.kind() == std::io::ErrorKind::WouldBlock {
                 TurnStreamIoError::WouldBlock

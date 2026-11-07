@@ -5,6 +5,7 @@ members = [
     "crates/flow-dispatch",
     "crates/transport-api",
     "crates/transport-turn",
+    "crates/platform-android",
 ]
 
 [workspace.package]

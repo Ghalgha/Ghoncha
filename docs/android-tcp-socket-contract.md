@@ -1,6 +1,6 @@
 # Android TCP underlay socket contract
 
-Status: implementation contract for the TURN-over-TCP adapter. The Rust TURN engine does not create, connect, protect, or bind sockets. Android owns connection setup and transfers a connected stream to the Rust I/O layer.
+Status: implementation contract for the TURN-over-TCP adapter. The Rust TURN engine and TLS adapter do not create, connect, protect, or bind sockets. Android must prepare the underlay socket and transfer a connected stream to Rust. The nonblocking Rustls adapter and Android platform-trust bootstrap exist, but Android socket protection/binding and VPN-service integration do not.
 
 ## 1. Required connection sequence
 
@@ -76,7 +76,11 @@ TLS must wrap the same connected, protected, network-bound TCP socket. The TLS i
 - expose only decrypted TURN stream bytes to TurnTcpEngine;
 - fail closed on certificate, handshake, record-authentication, or truncation errors.
 
-Do not treat TLS as implemented merely because the raw TCP driver accepts a generic stream socket. The current Rust driver supports a stream-socket abstraction; a production TLS wrapper and Android trust integration remain separate work.
+The Rust implementation now provides `TlsStreamSocket<S>` over an already-connected `TurnStreamSocket`, plus a JNI bootstrap and a platform-verified Rustls client-config factory. These components do not perform Android socket setup. A production caller must still call `VpnService.protect()`, bind the unconnected socket to the selected `Network`, connect it, validate the remote endpoint, transfer ownership safely, and drive readiness without routing the TURN socket back through the TUN interface. The app shell currently does none of this.
+
+### VK Calls and restricted-network scope
+
+This adapter implements generic TURN over TCP protected by TLS. It is not the VK Calls credential provider and is not the primary VK Calls carrier described in `docs/vk-calls-transport.md` (VK Calls TURN relay over UDP with a separate DTLS-SRTP/SRTP data path). Use TURN/TLS only when the authorized provider supplies a compatible TCP/TLS endpoint and that endpoint is reachable on the selected network. TLS, port selection, or a hostname alone cannot make an endpoint part of a network allowlist or guarantee reachability. Do not silently substitute generic TURN/TLS for the VK Calls path or report a restricted-network connection as available without a successful authenticated end-to-end probe.
 
 ## 5. Network handover and teardown
 
