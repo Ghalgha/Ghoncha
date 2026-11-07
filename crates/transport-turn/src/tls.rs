@@ -862,6 +862,7 @@ mod tests {
         writes: std::vec::Vec<u8>,
         read_data: std::vec::Vec<u8>,
         write_limit: usize,
+        read_limit: usize,
         eof: bool,
     }
 
@@ -876,7 +877,7 @@ mod tests {
 
         fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
             if !self.read_data.is_empty() {
-                let read = buffer.len().min(self.read_data.len());
+                let read = buffer.len().min(self.read_data.len()).min(self.read_limit);
                 buffer[..read].copy_from_slice(&self.read_data[..read]);
                 self.read_data.drain(..read);
                 Ok(read)
@@ -901,6 +902,7 @@ mod tests {
             writes: std::vec::Vec::new(),
             read_data: std::vec::Vec::new(),
             write_limit,
+            read_limit: usize::MAX,
             eof: false,
         }
     }
@@ -917,8 +919,10 @@ mod tests {
 
     #[test]
     fn tls_stream_socket_completes_verified_handshake_and_exchanges_plaintext() {
+        let mut underlying = mock_stream(usize::MAX);
+        underlying.read_limit = 3;
         let mut socket = TlsStreamSocket::new(
-            mock_stream(usize::MAX),
+            underlying,
             trusted_test_client_config(),
             ServerName::try_from("example.com").unwrap(),
         )
@@ -926,10 +930,8 @@ mod tests {
         let mut server = rustls::ServerConnection::new(test_server_config()).unwrap();
 
         // Drive both peers through the adapter's actual nonblocking stream
-        // contract. Each iteration gives the adapter one read opportunity,
-        // forwards any client ciphertext to the server, then queues any server
-        // handshake or post-handshake output for the next adapter read.
-        for _ in 0..16 {
+        // contract with every underlying read capped at three bytes.
+        for _ in 0..512 {
             assert_eq!(
                 socket.read(&mut [0_u8; 64]),
                 Err(TurnStreamIoError::WouldBlock)
@@ -990,7 +992,15 @@ mod tests {
             .extend_from_slice(&response_ciphertext);
 
         let mut plaintext = [0_u8; 64];
-        let plaintext_len = socket.read(&mut plaintext).unwrap();
+        let mut plaintext_len = 0;
+        for _ in 0..512 {
+            match socket.read(&mut plaintext[plaintext_len..]) {
+                Ok(0) => break,
+                Ok(read) => plaintext_len += read,
+                Err(TurnStreamIoError::WouldBlock) => continue,
+                Err(error) => panic!("fragmented TLS read failed: {error:?}"),
+            }
+        }
         assert_eq!(&plaintext[..plaintext_len], response);
         assert_eq!(socket.read(&mut plaintext), Ok(0));
         assert_eq!(socket.read(&mut plaintext), Ok(0));
