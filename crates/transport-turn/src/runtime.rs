@@ -15,8 +15,8 @@ use core::ptr;
 use ghoncha_transport_api::MonotonicTime;
 
 use crate::{
-    TurnReceiveResult, TurnUdpControlPoll, TurnUdpDriver,
-    TurnUdpDriverError, TurnUdpIoProgress, TurnUdpIoReady,
+    TurnReceiveResult, TurnUdpControlPoll, TurnUdpDriver, TurnUdpDriverError, TurnUdpIoProgress,
+    TurnUdpIoReady,
 };
 
 /// Errors while adding or locating a runtime allocation.
@@ -115,19 +115,35 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
     }
 
     pub fn token_for_id(&self, id: u16) -> Option<u64> {
-        self.slots.iter().flatten().find(|slot| slot.id == id).map(|slot| slot.token)
+        self.slots
+            .iter()
+            .flatten()
+            .find(|slot| slot.id == id)
+            .map(|slot| slot.token)
     }
 
     pub fn id_for_token(&self, token: u64) -> Option<u16> {
-        self.slots.iter().flatten().find(|slot| slot.token == token).map(|slot| slot.id)
+        self.slots
+            .iter()
+            .flatten()
+            .find(|slot| slot.token == token)
+            .map(|slot| slot.id)
     }
 
     pub fn driver(&self, id: u16) -> Option<&TurnUdpDriver<S>> {
-        self.slots.iter().flatten().find(|slot| slot.id == id).map(|slot| slot.driver.as_ref())
+        self.slots
+            .iter()
+            .flatten()
+            .find(|slot| slot.id == id)
+            .map(|slot| slot.driver.as_ref())
     }
 
     pub fn driver_mut(&mut self, id: u16) -> Option<&mut TurnUdpDriver<S>> {
-        self.slots.iter_mut().flatten().find(|slot| slot.id == id).map(|slot| slot.driver.as_mut())
+        self.slots
+            .iter_mut()
+            .flatten()
+            .find(|slot| slot.id == id)
+            .map(|slot| slot.driver.as_mut())
     }
 
     /// Earliest protocol timer across all active drivers.
@@ -154,12 +170,7 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
     /// Errors are returned to the callback for platform policy. A failed driver
     /// is not silently removed: the caller must unregister its poller token,
     /// drain/retire it, and then call remove().
-    pub fn poll_due<F>(
-        &mut self,
-        now: MonotonicTime,
-        max_drivers: usize,
-        mut on_result: F,
-    ) -> usize
+    pub fn poll_due<F>(&mut self, now: MonotonicTime, max_drivers: usize, mut on_result: F) -> usize
     where
         F: FnMut(u16, u64, Result<TurnUdpControlPoll, TurnUdpDriverError>),
     {
@@ -212,7 +223,9 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
             .iter_mut()
             .flatten()
             .find(|slot| slot.token == token)
-            .ok_or(TurnUdpRuntimeServiceError::Runtime(TurnUdpRuntimeError::UnknownAllocation))?;
+            .ok_or(TurnUdpRuntimeServiceError::Runtime(
+                TurnUdpRuntimeError::UnknownAllocation,
+            ))?;
         slot.driver
             .service_ready(ready, now, receive_buffer, on_datagram)
             .map_err(TurnUdpRuntimeServiceError::Driver)
@@ -232,18 +245,18 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
             .iter_mut()
             .flatten()
             .find(|slot| slot.id == id)
-            .ok_or(TurnUdpRuntimeQueueError::Runtime(TurnUdpRuntimeError::UnknownAllocation))?;
-        slot.driver.queue_peer_data(peer, payload, now, encoded_buffer)
+            .ok_or(TurnUdpRuntimeQueueError::Runtime(
+                TurnUdpRuntimeError::UnknownAllocation,
+            ))?;
+        slot.driver
+            .queue_peer_data(peer, payload, now, encoded_buffer)
             .map_err(TurnUdpRuntimeQueueError::Driver)
     }
 
     /// Removes a driver after its poller registration has already been
     /// unregistered. The caller owns the returned Box and decides whether its
     /// pending protocol work is flushed or explicitly abandoned.
-    pub fn remove(
-        &mut self,
-        id: u16,
-    ) -> Result<Box<TurnUdpDriver<S>>, TurnUdpRuntimeError> {
+    pub fn remove(&mut self, id: u16) -> Result<Box<TurnUdpDriver<S>>, TurnUdpRuntimeError> {
         let index = self
             .slots
             .iter()
@@ -257,9 +270,7 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
     }
 }
 
-impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> Default
-    for TurnUdpRuntime<S, CAPACITY>
-{
+impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> Default for TurnUdpRuntime<S, CAPACITY> {
     fn default() -> Self {
         Self::new()
     }
@@ -338,16 +349,22 @@ mod tests {
     #[test]
     fn owns_boxed_drivers_and_rejects_duplicate_identity() {
         let mut runtime = TurnUdpRuntime::<MockSocket, 2>::new();
-        runtime.insert(7, 101, driver(40001), MonotonicTime(10)).unwrap();
+        runtime
+            .insert(7, 101, driver(40001), MonotonicTime(10))
+            .unwrap();
         assert_eq!(runtime.len(), 1);
         assert_eq!(runtime.token_for_id(7), Some(101));
         assert_eq!(runtime.id_for_token(101), Some(7));
         assert_eq!(
-            runtime.insert(7, 102, driver(40002), MonotonicTime(10)).unwrap_err(),
+            runtime
+                .insert(7, 102, driver(40002), MonotonicTime(10))
+                .unwrap_err(),
             TurnUdpRuntimeError::DuplicateAllocationId
         );
         assert_eq!(
-            runtime.insert(8, 101, driver(40002), MonotonicTime(10)).unwrap_err(),
+            runtime
+                .insert(8, 101, driver(40002), MonotonicTime(10))
+                .unwrap_err(),
             TurnUdpRuntimeError::DuplicateRegistrationToken
         );
     }
@@ -355,7 +372,9 @@ mod tests {
     #[test]
     fn due_poll_queues_initial_allocate_and_exposes_timer() {
         let mut runtime = TurnUdpRuntime::<MockSocket, 2>::new();
-        runtime.insert(7, 101, driver(40001), MonotonicTime(10)).unwrap();
+        runtime
+            .insert(7, 101, driver(40001), MonotonicTime(10))
+            .unwrap();
         let mut called = false;
         let serviced = runtime.poll_due(MonotonicTime(10), 1, |id, token, result| {
             assert_eq!(id, 7);
@@ -373,23 +392,27 @@ mod tests {
     #[test]
     fn readiness_dispatch_uses_registration_token_and_flushes_control() {
         let mut runtime = TurnUdpRuntime::<MockSocket, 1>::new();
-        runtime.insert(7, 101, driver(40001), MonotonicTime(10)).unwrap();
+        runtime
+            .insert(7, 101, driver(40001), MonotonicTime(10))
+            .unwrap();
         runtime.poll_due(MonotonicTime(10), 1, |_, _, result| {
             assert!(result.unwrap().queued_control);
         });
         let mut receive = [0_u8; 2048];
-        let progress = runtime.service_ready(
-            101,
-            TurnUdpIoReady {
-                readable: false,
-                writable: true,
-                max_receive_datagrams: 0,
-                max_send_datagrams: 4,
-            },
-            MonotonicTime(11),
-            &mut receive,
-            |_| {},
-        ).unwrap();
+        let progress = runtime
+            .service_ready(
+                101,
+                TurnUdpIoReady {
+                    readable: false,
+                    writable: true,
+                    max_receive_datagrams: 0,
+                    max_send_datagrams: 4,
+                },
+                MonotonicTime(11),
+                &mut receive,
+                |_| {},
+            )
+            .unwrap();
         assert_eq!(progress.sent_datagrams, 1);
         assert_eq!(runtime.has_pending_output(101), Some(false));
     }
@@ -397,7 +420,9 @@ mod tests {
     #[test]
     fn removal_returns_driver_only_after_explicit_token_lookup() {
         let mut runtime = TurnUdpRuntime::<MockSocket, 1>::new();
-        runtime.insert(7, 101, driver(40001), MonotonicTime(10)).unwrap();
+        runtime
+            .insert(7, 101, driver(40001), MonotonicTime(10))
+            .unwrap();
         let removed = runtime.remove(7).unwrap();
         assert_eq!(removed.socket().local_addr().port(), 40001);
         assert!(runtime.is_empty());
@@ -406,9 +431,15 @@ mod tests {
     #[test]
     fn timer_polling_respects_work_budget_and_rotates_scan_cursor() {
         let mut runtime = TurnUdpRuntime::<MockSocket, 3>::new();
-        runtime.insert(1, 11, driver(40001), MonotonicTime(0)).unwrap();
-        runtime.insert(2, 12, driver(40002), MonotonicTime(0)).unwrap();
-        runtime.insert(3, 13, driver(40003), MonotonicTime(0)).unwrap();
+        runtime
+            .insert(1, 11, driver(40001), MonotonicTime(0))
+            .unwrap();
+        runtime
+            .insert(2, 12, driver(40002), MonotonicTime(0))
+            .unwrap();
+        runtime
+            .insert(3, 13, driver(40003), MonotonicTime(0))
+            .unwrap();
         let mut ids = [0_u16; 2];
         assert_eq!(runtime.poll_due(MonotonicTime(0), 2, |id, _, _| {
             ids[0] = if ids[0] == 0 { id } else { ids[1] };
