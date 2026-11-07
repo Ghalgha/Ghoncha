@@ -12,6 +12,8 @@ use std::sync::Arc;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection};
 
+use crate::{TurnStreamIoError, TurnStreamSocket};
+
 /// Maximum ciphertext accepted by one readiness callback.
 pub const MAX_TLS_CIPHERTEXT_INPUT: usize = 16_384;
 /// Maximum plaintext accepted in one write operation (one TLS record).
@@ -273,6 +275,227 @@ impl Write for BoundedVecWriter<'_> {
         Ok(())
     }
 }
+
+
+/// A nonblocking TLS stream adapter for an already-connected underlay socket.
+///
+/// It implements the same byte-stream contract as the raw TURN TCP socket, so
+/// it can be supplied directly to `TurnTcpDriver`. Socket ownership remains
+/// with this adapter; Android must protect and bind the raw socket before
+/// constructing it. The caller drives both read and write readiness.
+pub struct TlsStreamSocket<S> {
+    socket: S,
+    tls: TlsClientEngine,
+    ciphertext_input: [u8; MAX_TLS_CIPHERTEXT_INPUT],
+    input_len: usize,
+    input_offset: usize,
+    ciphertext_output: [u8; MAX_TLS_CIPHERTEXT_INPUT],
+    output_len: usize,
+    output_offset: usize,
+    retired: bool,
+}
+
+impl<S: TurnStreamSocket> TlsStreamSocket<S> {
+    pub fn new(
+        socket: S,
+        config: Arc<ClientConfig>,
+        server_name: ServerName<'static>,
+    ) -> Result<Self, TlsEngineError> {
+        let tls = TlsClientEngine::new(config, server_name)?;
+        Ok(Self {
+            socket,
+            tls,
+            ciphertext_input: [0; MAX_TLS_CIPHERTEXT_INPUT],
+            input_len: 0,
+            input_offset: 0,
+            ciphertext_output: [0; MAX_TLS_CIPHERTEXT_INPUT],
+            output_len: 0,
+            output_offset: 0,
+            retired: false,
+        })
+    }
+
+    pub fn tls(&self) -> &TlsClientEngine {
+        &self.tls
+    }
+
+    pub fn socket(&self) -> &S {
+        &self.socket
+    }
+
+    pub fn into_inner(self) -> S {
+        self.socket
+    }
+
+    /// Flushes one bounded ciphertext chunk on a writable socket.
+    /// Returns false while more output or socket writability is required.
+    pub fn flush_pending_ciphertext(&mut self) -> Result<bool, TurnStreamIoError> {
+        self.flush_ciphertext_once()
+    }
+
+    fn flush_ciphertext_once(&mut self) -> Result<bool, TurnStreamIoError> {
+        if self.retired {
+            return Err(TurnStreamIoError::Failed);
+        }
+
+        if self.output_offset == self.output_len {
+            self.output_offset = 0;
+            self.output_len = 0;
+            match self.tls.drain_ciphertext(&mut self.ciphertext_output) {
+                Ok(written) => self.output_len = written,
+                Err(_) => {
+                    self.retired = true;
+                    return Err(TurnStreamIoError::Failed);
+                }
+            }
+        }
+
+        if self.output_len == 0 {
+            return Ok(!self.tls.wants_write());
+        }
+
+        let pending = &self.ciphertext_output[self.output_offset..self.output_len];
+        let offered = pending.len();
+        match self.socket.write(pending) {
+            Ok(0) => {
+                self.retired = true;
+                Err(TurnStreamIoError::Failed)
+            }
+            Ok(written) if written > offered => {
+                self.retired = true;
+                Err(TurnStreamIoError::Failed)
+            }
+            Ok(written) => {
+                self.output_offset += written;
+                if self.output_offset == self.output_len {
+                    self.output_offset = 0;
+                    self.output_len = 0;
+                }
+                Ok(self.output_len == 0 && !self.tls.wants_write())
+            }
+            Err(TurnStreamIoError::WouldBlock) => Ok(false),
+            Err(TurnStreamIoError::Failed) => {
+                self.retired = true;
+                Err(TurnStreamIoError::Failed)
+            }
+        }
+    }
+
+    fn read_decrypted(&mut self, output: &mut [u8]) -> Result<usize, TurnStreamIoError> {
+        match self.tls.read_plaintext(output) {
+            Ok(read) => Ok(read),
+            Err(_) => {
+                self.retired = true;
+                Err(TurnStreamIoError::Failed)
+            }
+        }
+    }
+}
+
+impl<S: TurnStreamSocket> TurnStreamSocket for TlsStreamSocket<S> {
+    fn local_addr(&self) -> core::net::SocketAddr {
+        self.socket.local_addr()
+    }
+
+    fn peer_addr(&self) -> core::net::SocketAddr {
+        self.socket.peer_addr()
+    }
+
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
+        if self.retired {
+            return Err(TurnStreamIoError::Failed);
+        }
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        if !self.flush_ciphertext_once()? {
+            return Err(TurnStreamIoError::WouldBlock);
+        }
+
+        let plaintext = self.read_decrypted(buffer)?;
+        if plaintext > 0 {
+            return Ok(plaintext);
+        }
+        if self.tls.peer_closed() {
+            return Ok(0);
+        }
+
+        if self.input_offset == self.input_len {
+            self.input_offset = 0;
+            self.input_len = match self.socket.read(&mut self.ciphertext_input) {
+                Ok(0) => {
+                    self.retired = true;
+                    return Ok(0);
+                }
+                Ok(read) if read <= self.ciphertext_input.len() => read,
+                Ok(_) => {
+                    self.retired = true;
+                    return Err(TurnStreamIoError::Failed);
+                }
+                Err(error) => return Err(error),
+            };
+        }
+
+        let progress = match self.tls.feed_ciphertext(
+            &self.ciphertext_input[self.input_offset..self.input_len],
+        ) {
+            Ok(progress) => progress,
+            Err(_) => {
+                self.retired = true;
+                return Err(TurnStreamIoError::Failed);
+            }
+        };
+        self.input_offset += progress.ciphertext_consumed;
+        if self.input_offset == self.input_len {
+            self.input_offset = 0;
+            self.input_len = 0;
+        }
+
+        let plaintext = self.read_decrypted(buffer)?;
+        if plaintext > 0 {
+            return Ok(plaintext);
+        }
+        if self.tls.peer_closed() {
+            return Ok(0);
+        }
+        if !self.flush_ciphertext_once()? {
+            return Err(TurnStreamIoError::WouldBlock);
+        }
+        Err(TurnStreamIoError::WouldBlock)
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<usize, TurnStreamIoError> {
+        if self.retired {
+            return Err(TurnStreamIoError::Failed);
+        }
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        if !self.flush_ciphertext_once()? {
+            return Err(TurnStreamIoError::WouldBlock);
+        }
+        if !self.tls.application_data_ready() {
+            return Err(TurnStreamIoError::WouldBlock);
+        }
+
+        let accepted = match self.tls.write_plaintext(bytes) {
+            Ok(accepted) => accepted,
+            Err(_) => {
+                self.retired = true;
+                return Err(TurnStreamIoError::Failed);
+            }
+        };
+        if accepted == 0 {
+            return Err(TurnStreamIoError::WouldBlock);
+        }
+
+        // Once Rustls accepts plaintext, the TURN queue may advance. Any
+        // unwritten ciphertext remains in this adapter's bounded output buffer.
+        self.flush_ciphertext_once()?;
+        Ok(accepted)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
