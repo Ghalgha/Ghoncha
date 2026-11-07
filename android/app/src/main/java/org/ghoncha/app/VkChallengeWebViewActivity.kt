@@ -100,6 +100,16 @@ class VkChallengeWebViewActivity : Activity() {
                 request: WebResourceRequest,
             ): Boolean = !isAllowedUrl(request.url.toString())
 
+            override fun onRenderProcessGone(
+                view: WebView,
+                detail: android.webkit.RenderProcessGoneDetail,
+            ): Boolean {
+                status.text = "Процесс WebView завершился. Повторите проверку."
+                setResult(RESULT_CANCELED)
+                finish()
+                return true
+            }
+
             override fun onSafeBrowsingHit(
                 view: WebView,
                 request: WebResourceRequest,
