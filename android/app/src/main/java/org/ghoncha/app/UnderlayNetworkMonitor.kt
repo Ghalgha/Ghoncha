@@ -146,17 +146,11 @@ internal class UnderlayNetworkMonitor(
         synchronized(lock) { snapshots.values.toList() }
 
     override fun close() {
-        val shouldUnregister = synchronized(lock) {
-            if (!started) {
-                false
-            } else {
-                started = false
-                snapshots.clear()
-                generations.clear()
-                true
-            }
-        }
-        if (shouldUnregister) {
+        synchronized(lock) {
+            if (!started) return
+            started = false
+            snapshots.clear()
+            generations.clear()
             connectivityManager.unregisterNetworkCallback(callback)
         }
     }
