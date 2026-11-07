@@ -8,7 +8,7 @@ mod android {
     use std::ffi::c_void;
     use std::os::raw::c_int;
     use std::os::fd::{FromRawFd, OwnedFd};
-    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::{Mutex, OnceLock};
 
     use jni::EnvUnowned;
@@ -17,7 +17,7 @@ mod android {
     use jni::objects::{JClass, JObject};
 
     static ANDROID_VERIFIER_INITIALIZED: AtomicBool = AtomicBool::new(false);
-    static NEXT_SOCKET_HANDLE: AtomicI64 = AtomicI64::new(1);
+    static NEXT_SOCKET_HANDLE: AtomicU32 = AtomicU32::new(1);
     static UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, OwnedFd>>> = OnceLock::new();
 
     const F_GETFD: c_int = 1;
@@ -32,7 +32,6 @@ mod android {
 
     unsafe extern "C" {
         fn dup(oldfd: c_int) -> c_int;
-        fn close(fd: c_int) -> c_int;
         fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
         fn getsockopt(
             fd: c_int,
@@ -107,15 +106,16 @@ mod android {
             return None;
         }
 
-        let handle = NEXT_SOCKET_HANDLE.fetch_add(1, Ordering::Relaxed);
+        let handle = i64::from(NEXT_SOCKET_HANDLE.fetch_add(1, Ordering::Relaxed));
         if handle <= 0 {
             return None;
         }
 
         let mut sockets = socket_table().lock().ok()?;
-        if sockets.insert(handle, owned_fd).is_some() {
+        if sockets.contains_key(&handle) {
             return None;
         }
+        sockets.insert(handle, owned_fd);
         Some(handle)
     }
 
