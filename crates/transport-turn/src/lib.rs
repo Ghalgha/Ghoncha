@@ -901,7 +901,7 @@ impl<
         let protocol = self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
         let next_deadline = match &protocol {
             TurnPollRet::WaitUntil(deadline) => {
-                u64::try_from(deadline.as_nanos()).ok().map(MonotonicTime)
+                Some(MonotonicTime(deadline.as_nanos().max(0) as u64))
             }
             TurnPollRet::AllocateTcpSocket { .. }
             | TurnPollRet::TcpClose { .. }
@@ -1259,6 +1259,33 @@ mod tests {
             TurnReceiveResult::Ignored { from }
                 if from == "203.0.113.9:3478".parse().unwrap()
         ));
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn driver_exposes_the_protocol_wait_until_deadline_to_the_reactor() {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let mut driver = TurnUdpDriver::new(
+            socket,
+            "198.51.100.1:3478".parse().unwrap(),
+            "test-user",
+            "test-password",
+        )
+        .unwrap();
+
+        let progress = driver
+            .poll_control_with_deadline(MonotonicTime(1))
+            .unwrap();
+        match &progress.protocol {
+            TurnPollRet::WaitUntil(deadline) => assert_eq!(
+                progress.next_deadline,
+                Some(MonotonicTime(deadline.as_nanos().max(0) as u64))
+            ),
+            TurnPollRet::AllocateTcpSocket { .. }
+            | TurnPollRet::TcpClose { .. }
+            | TurnPollRet::Closed => assert_eq!(progress.next_deadline, None),
+        }
     }
 
     #[test]
