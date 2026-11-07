@@ -345,7 +345,8 @@ UI не должен содержать протокольную логику, r
 ### 14.2. Текущая рабочая ветка PR №4
 
 Ветка: `work/android-protected-udp-preparation`  
-HEAD: `0cd727763510f997af3002488195162524d3bd77`  
+Кодовый HEAD, прошедший аудит: `0cd727763510f997af3002488195162524d3bd77`  
+Текущий HEAD ветки после CI-настройки stacked PR: `7cd5d62b83e6942b603628b1d8d1a23e60ef41a9`  
 PR: https://github.com/Ghalgha/Ghoncha/pull/4  
 Состояние: открыт, draft; не считать влитым в `main`.
 
@@ -359,7 +360,6 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/4
 - **[РЕАЛИЗОВАНО В PR]** Android UDP socket adapter, реализующий TURN datagram socket contract.
 - **[РЕАЛИЗОВАНО В PR]** Fixed-capacity `poll(2)` readiness poller с registration tokens и unregister-before-close semantics.
 - **[РЕАЛИЗОВАНО В PR]** TURN UDP control deadline exposure и расчёт bounded wait duration для reactor.
-- **[РЕАЛИЗОВАНО В PR №5]** Heap-backed bounded TURN send queues; `TurnUdpDriver::new` использует fallible allocation и возвращает `AllocationFailed`, сохраняя прежние лимиты очередей.
 - **[РЕАЛИЗОВАНО В PR]** Документированный Android UDP socket contract.
 - **[ЧАСТИЧНО]** Native socket lifecycle подготовлен, но не подключён к persistent multi-allocation TURN runtime.
 - **[НЕ РЕАЛИЗОВАНО]** Android `VpnService`, TUN lifecycle, TURN driver orchestration, единый reactor TUN/TURN/TLS и end-to-end tunnel.
@@ -369,16 +369,17 @@ CI для проверенного HEAD:
 - **[РЕАЛИЗОВАНО / CI PASS]** Android debug build — success.
 - CI не заменяет device/instrumentation tests и live network interoperability.
 
-### 14.3. Следующая рабочая ветка — heap-backed TURN queues
+### 14.3. Последующая ветка PR №5 — heap-backed TURN queues
 
 Ветка: `work/heap-backed-turn-queues`  
-Основана на: `work/android-protected-udp-preparation`  
+Основана на PR №4 (`work/android-protected-udp-preparation`).  
 PR: https://github.com/Ghalgha/Ghoncha/pull/5  
-Состояние: открыт draft; CI ещё не завершён. Изменения не входят в `main`.
+Состояние: открыт draft, не слит; изменения не входят в `main`.
 
-- **[В РАБОТЕ]** Перенос фиксированных TURN queue slots из inline arrays в heap-backed `Vec`.
-- **[В РАБОТЕ]** Fallible `try_new()` для очередей и обработка ошибки в `TurnUdpDriver::new`.
-- **[В РАБОТЕ]** Тесты на ограниченную ёмкость, небольшой inline размер структуры и отказ allocation.
+- **[РЕАЛИЗОВАНО В PR №5]** Heap-backed bounded TURN send queues с сохранением лимитов.
+- **[РЕАЛИЗОВАНО В PR №5]** Fallible queue allocation и `TurnError::AllocationFailed` в `TurnUdpDriver::new`.
+- **[CI PASS]** Rust format, Clippy и workspace tests на PR-head `baf36b77be7a2b62a3a04e15b3557704f96283a3`.
+- **[В ПРОВЕРКЕ]** Android debug build на том же PR-head.
 
 ### 14.4. Другие открытые изменения
 
@@ -574,7 +575,7 @@ GHONCHA в целом не считается полноценным VPN до п
 
 ## 20. Последняя проверка и открытые ограничения
 
-Кодовый аудит выполнен на HEAD `0cd727763510f997af3002488195162524d3bd77`. Документ создан и ведётся в той же рабочей ветке `work/android-protected-udp-preparation`.
+Кодовый аудит выполнен на HEAD `0cd727763510f997af3002488195162524d3bd77`. `PROJECT_CONTEXT.md` перенесён в `main` отдельным коммитом `18b0ec133afc3b4dd0de88dd1c3962b022585be3`; `main` является источником истины. Рабочие ветки могут содержать согласованные изменения документа для review соответствующего этапа.
 
 - PR №4 остаётся открытым draft; merge не выполнен.
 - На указанном HEAD CI check runs завершились успешно: `Format, lint, and test` и `Android debug build`.
@@ -582,4 +583,4 @@ GHONCHA в целом не считается полноценным VPN до п
 - PR №2 и PR №3 остаются отдельными открытыми изменениями и не включены в статус `main`.
 - В репозитории до этого изменения не было файла `PROJECT_CONTEXT.md`; данный документ создаётся в текущей рабочей ветке как единая точка контекста.
 
-**Следующая задача:** завершить и проверить текущий Android protected UDP socket foundation в существующей рабочей ветке, не переходя к несвязанным подсистемам до закрытия его критериев готовности.
+**Текущая последовательность:** завершить проверку PR №4, затем PR №5; не сливать их автоматически. После прохождения проверок и принятия этих этапов продолжить Android VPN lifecycle (VpnService/TUN), затем объединённый TURN runtime.
