@@ -202,7 +202,6 @@ class VkChallengeWebViewActivity : Activity() {
         ) { view, message, sourceOrigin, isMainFrame, _ ->
             if (
                 view !== webView ||
-                !isMainFrame ||
                 !isAllowedOrigin(sourceOrigin) ||
                 message.data.length > MAX_BRIDGE_MESSAGE_LENGTH
             ) {
