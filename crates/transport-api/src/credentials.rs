@@ -47,6 +47,8 @@ pub enum CredentialProviderState {
     Idle,
     AwaitingUserAuthorization,
     Bootstrapping,
+    ChallengeRequired,
+    ChallengeInProgress,
     InteractiveVerificationRequired,
     Ready,
     CallUnavailable,
@@ -61,6 +63,9 @@ pub enum CredentialProviderState {
 pub enum CredentialProviderError {
     NotConfigured,
     AuthorizationRequired,
+    ChallengeRequired,
+    ChallengeRejected,
+    ChallengeExpired,
     InteractiveVerificationRequired,
     RateLimited,
     CallUnavailable,
@@ -95,9 +100,13 @@ pub struct CredentialPollOutcome {
 ///
 /// A concrete VK provider is configured separately with a user-authorized call
 /// link or account-session reference. Those secrets are not passed through this
-/// generic interface. The provider must stop and expose
-/// InteractiveVerificationRequired rather than automate CAPTCHA or account
-/// security challenges.
+/// generic interface. Supported challenge handlers may run through a bounded
+/// challenge session. The provider must expose ChallengeRequired and
+/// ChallengeInProgress while handling a challenge, and must not report success
+/// until the remote service confirms acceptance. If user interaction is needed,
+/// expose InteractiveVerificationRequired without discarding the challenge
+/// session. Rate limits and expired challenges are terminal for the current
+/// provider cycle; callers must not reset retry budgets by recreating it.
 pub trait TurnCredentialProvider {
     fn state(&self) -> CredentialProviderState;
 
