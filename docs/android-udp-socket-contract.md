@@ -1,6 +1,6 @@
 # Android UDP socket contract
 
-Status: the Android app now contains a small, callback-injected Kotlin preparation boundary that enforces protect-before-bind and closes the socket on failure. The VPN service, socket creation, network selection, native ownership transfer, and event-loop integration remain unimplemented.
+Status: the Android app contains a testable UDP socket factory and a callback-injected preparation boundary. The factory accepts a network-scoped resolver and protect/bind callbacks, resolves the TURN host before socket creation, prepares an unconnected socket, then binds an ephemeral local port. The VPN service, actual Android callback wiring, native ownership transfer, and event-loop integration remain unimplemented.
 
 ## Purpose
 
@@ -19,7 +19,7 @@ For every Allocation and every replacement socket:
 5. Bind a local address/port if required by the socket implementation, then configure non-blocking I/O and register it with the shared event loop.
 6. Only after all preceding steps succeed, hand ownership to the Rust TURN driver and allow the first Allocate request.
 
-The current `UnderlayDatagramSocketPreparer` enforces the critical `protect()` then `Network.bindSocket()` order on an unconnected `DatagramSocket`; it takes ownership during preparation and closes the socket if either operation fails. The VPN service must supply the real Android callbacks and must not send until preparation returns successfully. The exact ordering of any local-address bind must follow the Android API overload selected by the app. This helper is not yet wired to a `VpnService` or TURN driver.
+The current `UnderlayDatagramSocketFactory` takes a network-scoped DNS resolver, `VpnService.protect()` callback, `Network.bindSocket()` callback, and network-generation number. It resolves before creating the socket, then calls `protect()`, then binds the socket to the selected network, and finally binds an ephemeral local port. It returns the resolved server address, local address, socket, and generation together. Both the preparer and factory close the socket on setup failure. JVM tests cover call order, DNS failure, unusable answers, invalid ports, and the prepared socket state. The VPN service must supply the real Android callbacks and must not send until preparation returns successfully. This factory does not transfer the socket descriptor to Rust or connect the socket to the TURN driver.
 
 ## Runtime invariants
 
