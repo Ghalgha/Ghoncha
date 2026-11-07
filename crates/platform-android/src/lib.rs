@@ -124,8 +124,7 @@ mod android {
         {
             return None;
         }
-        let address_family =
-            u16::from_ne_bytes([local_address.bytes[0], local_address.bytes[1]]);
+        let address_family = u16::from_ne_bytes([local_address.bytes[0], local_address.bytes[1]]);
         let local_port = u16::from_be_bytes([local_address.bytes[2], local_address.bytes[3]]);
         if !matches!(address_family, AF_INET | AF_INET6) || local_port == 0 {
             return None;
