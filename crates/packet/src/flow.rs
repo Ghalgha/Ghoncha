@@ -92,12 +92,17 @@ impl FlowKey {
                             }
                             protocol = header[0];
                             let fragment_offset = (offset_flags & 0xfff8) >> 3;
-                            if fragment_offset != 0 || offset_flags & 1 != 0 {
+                            if fragment_offset != 0 {
                                 fragment = Some(u32::from_be_bytes([
                                     header[4], header[5], header[6], header[7],
                                 ]));
                                 payload_offset += 8;
                                 break;
+                            }
+                            if offset_flags & 1 != 0 {
+                                fragment = Some(u32::from_be_bytes([
+                                    header[4], header[5], header[6], header[7],
+                                ]));
                             }
                             8
                         }
@@ -352,6 +357,7 @@ mod tests {
         bytes[4..6].copy_from_slice(&16_u16.to_be_bytes());
         bytes[6] = 44;
         bytes[40] = 44;
+        bytes[42..44].copy_from_slice(&1_u16.to_be_bytes());
         bytes[48] = 17;
 
         assert_eq!(
