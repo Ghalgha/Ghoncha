@@ -62,7 +62,8 @@ mod android {
     unsafe extern "C" {
         fn dup(oldfd: c_int) -> c_int;
         fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
-        fn poll(fds: *mut PollFd, nfds: u32, timeout_ms: c_int) -> c_int;
+        // Android nfds_t is unsigned long; usize matches it on 32-bit and 64-bit ABIs.
+        fn poll(fds: *mut PollFd, nfds: usize, timeout_ms: c_int) -> c_int;
         fn getsockname(fd: c_int, address: *mut c_void, address_len: *mut u32) -> c_int;
         fn getpeername(fd: c_int, address: *mut c_void, address_len: *mut u32) -> c_int;
         fn getsockopt(
@@ -432,15 +433,13 @@ mod android {
                 count += 1;
             }
 
-            let descriptor_count =
-                u32::try_from(count).map_err(|_| AndroidPollerError::CapacityReached)?;
             let timeout_ms = timeout
                 .as_nanos()
                 .div_ceil(1_000_000)
                 .min(c_int::MAX as u128) as c_int;
             // SAFETY: descriptors contains descriptor_count initialized pollfd
             // entries; the kernel writes only their revents fields.
-            let result = unsafe { poll(descriptors.as_mut_ptr(), descriptor_count, timeout_ms) };
+            let result = unsafe { poll(descriptors.as_mut_ptr(), count, timeout_ms) };
             if result < 0 {
                 let error = std::io::Error::last_os_error();
                 if error.kind() == std::io::ErrorKind::Interrupted {
