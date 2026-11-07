@@ -18,6 +18,8 @@ pub const MAX_TLS_CIPHERTEXT_INPUT: usize = 16_384;
 pub const MAX_TLS_PLAINTEXT_WRITE: usize = 16_384;
 /// Rustls plaintext buffering limit for this connection.
 pub const MAX_TLS_BUFFERED_PLAINTEXT: usize = 64 * 1024;
+/// Hard bound for one batch of pending TLS records (including handshake flights).
+pub const MAX_TLS_PENDING_CIPHERTEXT: usize = 256 * 1024;
 
 /// TLS engine construction or I/O error.
 #[derive(Debug)]
@@ -29,6 +31,8 @@ pub enum TlsEngineError {
     NoCiphertextProgress,
     HandshakeIncomplete,
     PeerClosed,
+    OutputBufferLimitReached,
+    OutputFailed,
     Rustls(rustls::Error),
     Io(io::Error),
 }
@@ -60,6 +64,9 @@ pub struct TlsReadProgress {
 pub struct TlsClientEngine {
     connection: ClientConnection,
     peer_closed: bool,
+    pending_ciphertext: std::vec::Vec<u8>,
+    pending_offset: usize,
+    output_failed: bool,
 }
 
 impl TlsClientEngine {
@@ -82,6 +89,9 @@ impl TlsClientEngine {
         Ok(Self {
             connection,
             peer_closed: false,
+            pending_ciphertext: std::vec::Vec::new(),
+            pending_offset: 0,
+            output_failed: false,
         })
     }
 
@@ -162,6 +172,9 @@ impl TlsClientEngine {
         if !self.application_data_ready() {
             return Err(TlsEngineError::HandshakeIncomplete);
         }
+        if self.output_failed {
+            return Err(TlsEngineError::OutputFailed);
+        }
         if self.peer_closed {
             return Err(TlsEngineError::PeerClosed);
         }
@@ -179,44 +192,73 @@ impl TlsClientEngine {
         }
     }
 
-    /// Writes as much pending TLS ciphertext as fits in the supplied buffer.
-    /// Repeatedly call while `wants_write()` is true; no socket I/O occurs here.
+    /// Stages pending TLS records into a bounded buffer, then copies a
+    /// caller-sized prefix. This avoids partially writing a TLS record into a
+    /// too-small caller buffer and accidentally replaying its prefix.
     pub fn drain_ciphertext(
         &mut self,
         output: &mut [u8],
     ) -> Result<usize, TlsEngineError> {
-        if output.is_empty() || !self.connection.wants_write() {
+        if self.output_failed {
+            return Err(TlsEngineError::OutputFailed);
+        }
+        if output.is_empty() {
             return Ok(0);
         }
 
-        let mut sink = SliceWriter::new(output);
-        self.connection.write_tls(&mut sink)?;
-        Ok(sink.written())
-    }
-}
+        if self.pending_offset == self.pending_ciphertext.len() {
+            self.pending_ciphertext.clear();
+            self.pending_offset = 0;
+        }
 
-struct SliceWriter<'a> {
-    output: &'a mut [u8],
-    written: usize,
-}
+        if self.pending_ciphertext.is_empty() && self.connection.wants_write() {
+            let mut sink = BoundedVecWriter::new(
+                &mut self.pending_ciphertext,
+                MAX_TLS_PENDING_CIPHERTEXT,
+            );
+            if self.connection.write_tls(&mut sink).is_err() {
+                self.output_failed = true;
+                self.pending_ciphertext.clear();
+                return Err(TlsEngineError::OutputBufferLimitReached);
+            }
+            if self.pending_ciphertext.is_empty() && self.connection.wants_write() {
+                self.output_failed = true;
+                return Err(TlsEngineError::OutputFailed);
+            }
+        }
 
-impl<'a> SliceWriter<'a> {
-    fn new(output: &'a mut [u8]) -> Self {
-        Self { output, written: 0 }
-    }
-
-    const fn written(&self) -> usize {
-        self.written
-    }
-}
-
-impl Write for SliceWriter<'_> {
-    fn write(&mut self, input: &[u8]) -> io::Result<usize> {
-        let available = self.output.len().saturating_sub(self.written);
-        let count = available.min(input.len());
-        self.output[self.written..self.written + count].copy_from_slice(&input[..count]);
-        self.written += count;
+        let remaining = self.pending_ciphertext.len().saturating_sub(self.pending_offset);
+        let count = remaining.min(output.len());
+        output[..count].copy_from_slice(
+            &self.pending_ciphertext[self.pending_offset..self.pending_offset + count],
+        );
+        self.pending_offset += count;
         Ok(count)
+    }
+}
+
+struct BoundedVecWriter<'a> {
+    output: &'a mut std::vec::Vec<u8>,
+    maximum: usize,
+}
+
+impl<'a> BoundedVecWriter<'a> {
+    fn new(output: &'a mut std::vec::Vec<u8>, maximum: usize) -> Self {
+        Self { output, maximum }
+    }
+}
+
+impl Write for BoundedVecWriter<'_> {
+    fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+        let next_len = self.output.len().saturating_add(input.len());
+        if next_len > self.maximum {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "TLS ciphertext batch exceeds configured bound",
+            ));
+        }
+        self.output.extend_from_slice(input);
+        Ok(input.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
