@@ -388,12 +388,24 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/9
 - Device-level handover не проверен.
 - PR №7 закрыт без слияния; PR №9 — чистая main-based замена.
 
+### 14.7. PR №11 — heap-owned multi-allocation TURN runtime core
+
+Ветка: `work/native-turn-runtime-core`  
+PR: https://github.com/Ghalgha/Ghoncha/pull/11  
+HEAD: `1edebffb5d1e8256ec4b982678c74bf863e1cfcb`  
+Основан на `main`; открыт draft. CI ожидает выполнения.
+
+- **[РЕАЛИЗОВАНО В PR №11]** Bounded slot owner с одним `Box<TurnUdpDriver<S>>` на allocation и fallible box allocation.
+- **[РЕАЛИЗОВАНО В PR №11]** Opaque registration tokens, earliest protocol deadline, bounded timer scanning с persistent cursor, readiness dispatch и pending-output query.
+- **[РЕАЛИЗОВАНО В PR №11]** Тесты ownership, identity, timer scheduling, readiness flush, removal и work budget.
+- **Не реализовано:** Android poller wiring, worker thread, TUN polling, packet router integration, real network/device verification.
+
 ### 14.5. PR №10 — Android VpnService и TUN descriptor lifecycle
 
 Ветка: `work/android-vpnservice-tun-lifecycle-v2`  
 HEAD: `fd8b39bf2484478a4381e6c9c86cda906d84df6e`  
 PR: https://github.com/Ghalgha/Ghoncha/pull/10  
-После merge PR №9 перенаправлен на `main`. Состояние: открыт draft; последний CI run `42393331923` выполняется. Предыдущий run `42392354954` выявил Kotlin compile error: `Os.close(Int)` ожидал `FileDescriptor`; исправлено на закрытие через `ParcelFileDescriptor.adoptFd()`, новый CI запущен.
+После merge PR №9 перенаправлен на `main`. Состояние: открыт, **Ready for review**, не слит. CI run `42393331923` полностью PASS: Rust format/Clippy/workspace tests, Android JVM tests, debug/release APK и native packaging для четырёх ABI. Review threads отсутствуют.
 
 - **[РЕАЛИЗОВАНО В PR №10]** Android `VpnService` declaration, VPN consent flow и foreground notification lifecycle.
 - **[РЕАЛИЗОВАНО В PR №10]** Локальный TUN с IPv4 host address, без IP routes и без перехвата пользовательского трафика.
@@ -605,9 +617,10 @@ GHONCHA в целом не считается полноценным VPN до п
 Состояние проверено после merge PR №8 (`db03aa084f544c1f2f58237fee85500a6402b977`) и PR №9 (`53ce92bc33d1bde7dc227d412918d5018cda5483`). `PROJECT_CONTEXT.md` является каноническим документом и редактируется только в корне ветки `main`; не добавлять его в PR diff и не вносить в него изменения из рабочих веток. Изменения контекста вносить непосредственно в `main`.
 
 - PR №4, PR №8 и PR №9 слиты в main; CI для PR №8/9 прошёл полностью.
-- PR №10 остаётся draft; последний CI run `42393331923` выполняется после исправления Kotlin compile error. Предыдущий run завершился ошибкой `Os.close(Int)`.
+- PR №10 Ready for review, CI `42393331923` полностью PASS; не слит.
+- PR №11 draft; добавляет платформенно-независимый multi-allocation TURN runtime core; CI ожидает выполнения.
 - Успешный CI не доказывает работу на физическом устройстве, совместимость с живым VK TURN relay, корректность маршрута в ограниченной сети или наличие end-to-end VPN.
 - PR №2 и PR №3 остаются отдельными открытыми изменениями и не включены в статус `main`.
 - `PROJECT_CONTEXT.md` — единственная каноническая копия в `main`; отсутствие этого файла в остальных ветках является намеренным.
 
-**Текущая последовательность:** завершить CI и review PR №10 (VpnService/TUN ownership), затем провести device-level lifecycle verification. После этого реализовать native multi-allocation TURN runtime и связать его с TUN readiness; не объявлять VPN рабочим до end-to-end теста.
+**Текущая последовательность:** PR №10 готов к review, но не слит без прямого разрешения. PR №11 реализует платформенно-независимое ядро владения TURN drivers; после его CI/review следующий этап — связать AndroidUdpPoller, adopted UDP sockets, TurnUdpRuntime, TUN readiness и packet router под единым native lifecycle owner. Затем выполнить device-level проверки; не объявлять VPN рабочим до end-to-end теста.
