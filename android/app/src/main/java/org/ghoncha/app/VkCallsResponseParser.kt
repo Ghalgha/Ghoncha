@@ -136,6 +136,8 @@ internal sealed class VkCallsResult {
     ) : VkCallsResult()
 
     object RateLimited : VkCallsResult()
+    object ChallengeCancelled : VkCallsResult()
+    object NetworkUnavailable : VkCallsResult()
     object ProviderFailure : VkCallsResult()
     object InvalidResponse : VkCallsResult()
 }
