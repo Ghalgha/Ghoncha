@@ -76,6 +76,7 @@ pub enum AllocationManagerError {
     DeallocationNotConfirmed,
     InvalidStateTransition,
     PendingWorkRemains,
+    ActiveFlowsRemain,
     Dispatch(DispatchError),
 }
 
@@ -350,6 +351,9 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
         if slot.load.in_flight_packets != 0 || slot.load.queued_bytes != 0 {
             return Err(AllocationManagerError::PendingWorkRemains);
         }
+        if self.flow_dispatcher.assigned_flows(id) != 0 {
+            return Err(AllocationManagerError::ActiveFlowsRemain);
+        }
         slot.deallocation_confirmed = false;
         slot.socket_closed_after_deallocation_failure = false;
         slot.state = AllocationState::Deallocating;
@@ -414,6 +418,9 @@ impl<const CAPACITY: usize, const FLOW_CAPACITY: usize>
             .expect("located slot must be occupied");
         if slot.load.in_flight_packets != 0 || slot.load.queued_bytes != 0 {
             return Err(AllocationManagerError::PendingWorkRemains);
+        }
+        if self.flow_dispatcher.assigned_flows(id) != 0 {
+            return Err(AllocationManagerError::ActiveFlowsRemain);
         }
         if slot.state != AllocationState::Deallocating {
             return Err(AllocationManagerError::NotDeallocating);
@@ -639,6 +646,24 @@ mod tests {
     }
 
     #[test]
+    fn draining_cannot_deallocate_while_flow_affinity_entries_remain() {
+        let mut manager = TurnAllocationManager::<2>::new();
+        manager.insert(7, engine(40007)).unwrap();
+        let _ = manager.dispatch_flow(flow_key(), 1, 2).unwrap();
+        manager.begin_drain(7).unwrap();
+
+        assert_eq!(
+            manager.begin_deallocation(7),
+            Err(AllocationManagerError::ActiveFlowsRemain)
+        );
+
+        // Once the flow's configured idle lifetime expires, its affinity
+        // entry is removed and deallocation may proceed.
+        assert_eq!(manager.expire_idle_flows(10, 9, 1024), 1);
+        manager.begin_deallocation(7).unwrap();
+    }
+
+    #[test]
     fn draining_waits_for_queued_bytes_even_when_no_packet_is_in_flight() {
         let mut manager = TurnAllocationManager::<1>::new();
         manager.insert(1, engine(40001)).unwrap();
@@ -675,6 +700,11 @@ mod tests {
         };
         assert_eq!(second.kind, DispatchKind::AffinityHit);
         manager.begin_drain(7).unwrap();
+        assert_eq!(
+            manager.begin_deallocation(7),
+            Err(AllocationManagerError::ActiveFlowsRemain)
+        );
+        manager.expire_idle_flows(3, 1, 1024);
         manager.begin_deallocation(7).unwrap();
         manager.confirm_deallocation(7).unwrap();
         manager.take_drained(7).unwrap();
