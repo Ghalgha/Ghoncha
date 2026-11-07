@@ -9,7 +9,7 @@ The intended stack is:
 ```text
 GHONCHA authenticated tunnel records
   -> TURN client protocol (RFC 8656)
-  -> TLS 1.2/1.3 stream protection (RFC 8446; TLS 1.2 only if policy requires)
+  -> TLS 1.2/1.3 stream protection (RFC 9846)
   -> connected TCP socket
 ```
 
@@ -143,6 +143,7 @@ Not implemented or not yet validated:
 The current code is an implementation foundation, not a release-ready TLS transport. Do not enable it as a production fallback until the missing trust, handshake, server interoperability, handover and device tests pass.
 References:
 - [RFC 8656 — Traversal Using Relays around NAT (TURN)](https://www.rfc-editor.org/rfc/rfc8656)
-- [RFC 8446 — The Transport Layer Security (TLS) Protocol Version 1.3](https://www.rfc-editor.org/rfc/rfc8446)
+- [RFC 9846 — The Transport Layer Security (TLS) Protocol Version 1.3](https://www.rfc-editor.org/rfc/rfc9846)
+- [RFC 9525 — Service Identity in TLS](https://www.rfc-editor.org/rfc/rfc9525)
 - [Rustls ClientConnection](https://docs.rs/rustls/latest/rustls/client/struct.ClientConnection.html)
 - [rustls-platform-verifier 0.7.1](https://docs.rs/rustls-platform-verifier/0.7.1/rustls_platform_verifier/)
