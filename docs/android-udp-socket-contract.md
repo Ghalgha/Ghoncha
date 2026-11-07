@@ -1,6 +1,6 @@
 # Android UDP socket contract
 
-Status: the Android app contains a testable UDP socket factory and a callback-injected preparation boundary. The factory accepts a network-scoped resolver and protect/bind callbacks, resolves the TURN host before socket creation, prepares an unconnected socket, then binds an ephemeral local port. The VPN service, actual Android callback wiring, native ownership transfer, and event-loop integration remain unimplemented.
+Status: the Android app contains a testable UDP socket factory, real Android Network/VpnService callback adapter, and an initial JNI descriptor-ownership boundary. A prepared socket can be duplicated into a Rust-owned registry handle. The VPN service, reactor registration, TURN driver integration, and device-level route validation remain unimplemented.
 
 ## Purpose
 
@@ -19,7 +19,7 @@ For every Allocation and every replacement socket:
 5. Bind a local address/port if required by the socket implementation, then configure non-blocking I/O and register it with the shared event loop.
 6. Only after all preceding steps succeed, hand ownership to the Rust TURN driver and allow the first Allocate request.
 
-The current `UnderlayDatagramSocketFactory` takes a network-scoped DNS resolver, `VpnService.protect()` callback, `Network.bindSocket()` callback, and network-generation number. It resolves before creating the socket, then calls `protect()`, then binds the socket to the selected network, and finally binds an ephemeral local port. `AndroidUnderlayDatagramSocketFactory` supplies the real Android `Network.getAllByName()`, `VpnService.protect()`, and `Network.bindSocket()` APIs. The factory returns the resolved server address, local address, socket, and generation together. Both the preparer and factory close the socket on setup failure. JVM tests cover call order, DNS failure, unusable answers, invalid ports, and the prepared socket state. A future VPN service must pass the current selected `Network` and must not send until preparation returns successfully. This factory does not transfer the socket descriptor to Rust or connect the socket to the TURN driver.
+The current `UnderlayDatagramSocketFactory` takes a network-scoped DNS resolver, `VpnService.protect()` callback, `Network.bindSocket()` callback, and network-generation number. It resolves before creating the socket, then calls `protect()`, binds to the selected network, binds an ephemeral local port, and switches the channel to non-blocking mode. The channel family is selected from the resolved IPv4/IPv6 address and checked against the resulting local address. `AndroidUnderlayDatagramSocketFactory` supplies the real Android `Network.getAllByName()`, `VpnService.protect()`, and `Network.bindSocket()` APIs. The factory rejects stale network generations before DNS and after preparation. `PreparedUnderlayDatagramSocket.transferToNative()` creates a stable `ParcelFileDescriptor` duplicate, passes its descriptor to JNI, and closes the Java channel only after native adoption succeeds. The native layer duplicates the descriptor again, verifies `SO_TYPE == SOCK_DGRAM`, sets `FD_CLOEXEC` and `O_NONBLOCK`, and stores the owned descriptor behind an opaque handle. This double-dup sequence also avoids the pre-API-29 `fromDatagramSocket()` descriptor-lifetime issue. `NativeUdpSocketHandle` closes the native duplicate unless Rust has taken ownership through `take_udp_socket()`. JVM tests cover factory ordering, DNS failure, unusable answers, invalid ports, address-family selection, non-blocking mode, and stale-generation rejection. Native JNI build verification is still pending. The native handle is not yet registered with the TURN driver or a poll/epoll reactor.
 
 ## Runtime invariants
 
@@ -35,7 +35,7 @@ The current `UnderlayDatagramSocketFactory` takes a network-scoped DNS resolver,
 
 ## Rust boundary
 
-The Android adapter should implement `TurnDatagramSocket` over an owned native socket handle. The adapter must keep the handle alive for the entire driver lifetime and close it exactly once after the driver stops. The control plane may pass the socket handle/ownership token into Rust, but packet payloads must not cross FFI one packet at a time.
+The Android adapter should call `take_udp_socket(handle)` once to move the `OwnedFd` out of the JNI registry, then wrap it in a platform socket type and register it with the reactor. After this call, Kotlin must not close the handle; Rust owns the descriptor and must close it exactly once when the driver stops. Packet payloads must not cross FFI one packet at a time.
 
 The current `TurnUdpDriver` does not create Android sockets, call `protect()`, bind a `Network`, register readiness events, or perform Android lifecycle callbacks. These remain unimplemented integration work.
 
