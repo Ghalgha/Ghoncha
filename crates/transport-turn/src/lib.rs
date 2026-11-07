@@ -900,9 +900,7 @@ impl<
         self.ensure_active()?;
         let protocol = self.engine.poll(now).map_err(TurnUdpDriverError::Turn)?;
         let next_deadline = match &protocol {
-            TurnPollRet::WaitUntil(deadline) => {
-                Some(monotonic_deadline(*deadline))
-            }
+            TurnPollRet::WaitUntil(deadline) => Some(monotonic_deadline(*deadline)),
             TurnPollRet::AllocateTcpSocket { .. }
             | TurnPollRet::TcpClose { .. }
             | TurnPollRet::Closed => None,
