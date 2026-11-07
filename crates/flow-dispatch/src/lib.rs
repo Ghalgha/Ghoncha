@@ -523,6 +523,62 @@ mod tests {
     }
 
     #[test]
+    fn insertion_reuses_tombstone_without_hiding_later_collisions() {
+        let workers = [
+            Worker {
+                id: 10,
+                eligible: true,
+            },
+            Worker {
+                id: 20,
+                eligible: true,
+            },
+        ];
+        let mut dispatcher = FlowDispatcher::<8>::new();
+        let first = (1..=u16::MAX)
+            .map(key)
+            .find(|candidate| {
+                candidate.stable_hash() as usize % 8 == key(1).stable_hash() as usize % 8
+            })
+            .unwrap();
+        let second = (1..=u16::MAX)
+            .map(key)
+            .find(|candidate| {
+                candidate != &first
+                    && candidate.stable_hash() as usize % 8 == first.stable_hash() as usize % 8
+            })
+            .unwrap();
+        let third = (1..=u16::MAX)
+            .map(key)
+            .find(|candidate| {
+                candidate != &first
+                    && candidate != &second
+                    && candidate.stable_hash() as usize % 8 == first.stable_hash() as usize % 8
+            })
+            .unwrap();
+
+        dispatcher.dispatch_to(first, 1, &workers, 10).unwrap();
+        dispatcher.dispatch_to(second, 1, &workers, 20).unwrap();
+        assert_eq!(dispatcher.forget_worker(10), 1);
+        dispatcher.dispatch_to(third, 2, &workers, 10).unwrap();
+
+        assert_eq!(
+            dispatcher.lookup_existing(second, 3, &workers),
+            Some(DispatchDecision {
+                worker_id: 20,
+                kind: DispatchKind::AffinityHit,
+            })
+        );
+        assert_eq!(
+            dispatcher.lookup_existing(third, 3, &workers),
+            Some(DispatchDecision {
+                worker_id: 10,
+                kind: DispatchKind::AffinityHit,
+            })
+        );
+    }
+
+    #[test]
     fn expiry_scan_respects_its_budget() {
         let mut dispatcher = FlowDispatcher::<8>::new();
         for port in 1..=8 {
