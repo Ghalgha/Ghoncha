@@ -33,7 +33,7 @@ import org.json.JSONObject
  * No fingerprint spoofing, synthetic pointer events, or automated gestures
  * are performed here.
  */
-data class VkChallengeResult(val successToken: String?)
+data class VkChallengeResult(val challengeId: Long, val successToken: String)
 
 class VkChallengeWebViewActivity : Activity() {
     private lateinit var webView: WebView
@@ -168,6 +168,7 @@ class VkChallengeWebViewActivity : Activity() {
                 CookieManager.getInstance().flush()
                 val result = Intent().apply {
                     putExtra(EXTRA_USER_CONFIRMED, true)
+                    putExtra(EXTRA_CHALLENGE_ID, intent.getLongExtra(EXTRA_CHALLENGE_ID, 0L))
                     putExtra(EXTRA_CHALLENGE_TOKEN, token)
                 }
                 setResult(RESULT_OK, result)
@@ -274,15 +275,18 @@ class VkChallengeWebViewActivity : Activity() {
         VkChallengeUrlPolicy.allows(origin.toString())
 
     companion object {
-        fun createIntent(context: Context, challengeUrl: String): Intent {
+        fun createIntent(context: Context, challengeUrl: String, challengeId: Long): Intent {
             require(VkChallengeUrlPolicy.allows(challengeUrl)) {
                 "Challenge URL must use an allowlisted VK HTTPS origin"
             }
+            require(challengeId > 0) { "Challenge ID must be positive" }
             return Intent(context, VkChallengeWebViewActivity::class.java)
                 .putExtra(EXTRA_CHALLENGE_URL, challengeUrl)
+                .putExtra(EXTRA_CHALLENGE_ID, challengeId)
         }
 
         const val EXTRA_CHALLENGE_URL = "org.ghoncha.app.VK_CHALLENGE_URL"
+        const val EXTRA_CHALLENGE_ID = "org.ghoncha.app.VK_CHALLENGE_ID"
         const val EXTRA_CHALLENGE_TOKEN = "org.ghoncha.app.VK_CHALLENGE_TOKEN"
         const val EXTRA_USER_CONFIRMED = "org.ghoncha.app.VK_USER_CONFIRMED"
 
@@ -298,10 +302,11 @@ class VkChallengeWebViewActivity : Activity() {
             ) {
                 return null
             }
-            return VkChallengeResult(
-                successToken = data.getStringExtra(EXTRA_CHALLENGE_TOKEN)
-                    ?.takeIf { it.isNotBlank() && it.length <= MAX_TOKEN_LENGTH },
-            )
+            val challengeId = data.getLongExtra(EXTRA_CHALLENGE_ID, 0L)
+            val token = data.getStringExtra(EXTRA_CHALLENGE_TOKEN)
+                ?.takeIf { it.isNotBlank() && it.length <= MAX_TOKEN_LENGTH }
+            if (challengeId <= 0 || token == null) return null
+            return VkChallengeResult(challengeId, token)
         }
 
         private const val BRIDGE_NAME = "GhonchaCaptcha"
