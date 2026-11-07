@@ -37,7 +37,6 @@ class VkChallengeWebViewActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var status: TextView
     private var challengeToken: String? = null
-    private var documentStartScriptInstalled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -203,7 +202,6 @@ class VkChallengeWebViewActivity : Activity() {
             CHALLENGE_OBSERVER_SCRIPT,
             ALLOWED_ORIGIN_RULES,
         )
-        documentStartScriptInstalled = true
     }
 
     override fun onDestroy() {
