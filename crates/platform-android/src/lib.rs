@@ -394,9 +394,7 @@ mod android {
                 .min(c_int::MAX as u128) as c_int;
             // SAFETY: descriptors contains descriptor_count initialized pollfd
             // entries; the kernel writes only their revents fields.
-            let result = unsafe {
-                poll(descriptors.as_mut_ptr(), descriptor_count, timeout_ms)
-            };
+            let result = unsafe { poll(descriptors.as_mut_ptr(), descriptor_count, timeout_ms) };
             if result < 0 {
                 let error = std::io::Error::last_os_error();
                 if error.kind() == std::io::ErrorKind::Interrupted {
