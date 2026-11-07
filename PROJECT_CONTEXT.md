@@ -602,7 +602,7 @@ Ghoncha в целом не считается полноценным VPN до п
 - TURN — RFC 8656: https://www.rfc-editor.org/rfc/rfc8656
 - DTLS-SRTP — RFC 5764: https://www.rfc-editor.org/rfc/rfc5764
 - SRTP AES-GCM — RFC 7714: https://www.rfc-editor.org/rfc/rfc7714
-- WireGuard protocol — https://www.wireguard.com/
+- WireGuard protocol — официальная спецификация и RFC-совместимые тесты; не привязывать выбор реализации к конкретному стороннему приложению.
 - Android VpnService — https://developer.android.com/reference/android/net/VpnService
 - Android VPN guide — https://developer.android.com/develop/connectivity/vpn
 - Android Network — https://developer.android.com/reference/android/net/Network
@@ -620,8 +620,8 @@ Ghoncha в целом не считается полноценным VPN до п
 
 1. **Разделять DPI-блокировку и режим белого списка.** В теме прямо отмечается, что изменение DNS/SNI, TLS fingerprint или фрагментация ClientHello не восстанавливают путь, если сеть вообще не разрешает соединение с адресом/портом сервера. Диагностика должна сначала классифицировать отказ: DNS, IP reachability, TCP/UDP handshake, TURN allocation, DTLS/SRTP handshake или внутренний VPN.
 2. **Не считать доступность глобальной.** Пользователи сообщают о различиях между регионами, операторами, сетевыми режимами и даже отдельными периодами работы сети. Сервер/relay, доступный в одной точке, не подтверждает доступность в другой. Нужны измерения по матрице оператор × регион × тип доступа × время и безопасная адаптация транспортных параметров без жёстко зашитых «универсальных» адресов.
-3. **Проверять VK Calls TURN в реальной сети, а не по списку разрешённых доменов.** Тема упоминает перенос WireGuard/Hysteria через VK Calls TURN с DTLS 1.2. Это подтверждает релевантность выбранного транспортного направления, но не доказывает совместимость конкретного протокольного стека Ghoncha. Требуются отдельные interoperability tests для TURN, DTLS-SRTP, SRTP, Gateway identity и полного двустороннего VPN-пути.
-4. **Не переносить настройки TLS-маскировки на другой протокол автоматически.** Сообщения о смене uTLS fingerprint и фрагментации TLS ClientHello относятся к TLS/VLESS-сценариям. Они не являются готовым решением для DTLS-SRTP или TURN и могут нарушить совместимость либо ухудшить безопасность. Любой подобный эксперимент — только в соответствующем transport adapter, с протокольной проверкой и без отключения аутентификации/проверки сертификатов.
+3. **Проверять VK Calls TURN в реальной сети, а не по списку разрешённых доменов.** Сам факт доступности VK Calls не доказывает совместимость выбранного протокольного стека Ghoncha. Требуются отдельные interoperability tests для TURN, DTLS-SRTP, SRTP, Gateway identity и полного двустороннего VPN-пути.
+4. **Не переносить настройки одного транспортного уровня на другой автоматически.** Изменение TLS fingerprint или фрагментация ClientHello не являются готовым решением для DTLS-SRTP или TURN и могут нарушить совместимость либо ухудшить безопасность. Любой подобный эксперимент — только в соответствующем transport adapter, с протокольной проверкой и без отключения аутентификации/проверки сертификатов.
 5. **Измерять деградацию и ограничивать параллелизм.** В теме встречаются сообщения о таймаутах при увеличении числа потоков и о временных/периодических отказах. Профили Unlimited/Standard/EnergySaving должны опираться на измерения потерь, RTT, jitter, goodput, CPU и батареи; увеличение потоков не должно быть безусловной реакцией на низкую скорость.
 6. **Учитывать поверхность атаки управляющей инфраструктуры.** Обсуждение отдельно обращает внимание на риск дополнительных публичных панелей управления VPS. Для Ghoncha сохранять минимальный control plane, SSH host-key verification, минимальные привилегии, отсутствие публичной административной панели по умолчанию и аудит действий deployment.
 7. **Считать сторонние подписки и конфигурации недоверенным вводом.** Не импортировать конфигурации автоматически без проверки схемы, размеров, адресов, разрешённых транспортов и параметров криптографии. В перспективе — подпись/проверка происхождения собственных конфигураций, защита секретов и исключение credentials из логов.
@@ -653,17 +653,17 @@ Ghoncha в целом не считается полноценным VPN до п
 
 ---
 
-## 21. Проверка гипотез о сигнатурной блокировке CSQTT/WDTT (2026-11-07)
+## 21. Проверка гипотез о сигнатурной фильтрации транспортного трафика (2026-11-07)
 
 Пользователь предоставил четыре фрагмента предполагаемых правил EcoDPI/RDP.ru, Suricata/Snort, XDP/eBPF и iptables/nftables. Их происхождение и соответствие реальному формату ТСПУ не подтверждены. Не считать их опубликованной конфигурацией РКН, фактическим правилом оператора или доказательством возможности массовой селективной блокировки за 15 минут.
 
 ### 21.1. Протокольные утверждения
 
 - RFC 5764 описывает DTLS-SRTP: SRTP-пакеты не должны обрабатываться до завершения DTLS handshake. Это требование относится к корректной ассоциации DTLS-SRTP, но само по себе не позволяет DPI надёжно заключить, что любой первый наблюдаемый RTP-пакет был отправлен без handshake.
-- Первый байт в диапазоне 0x80–0xBF используется демультиплексированием DTLS-SRTP для классификации RTP/RTCP. Это классификационный диапазон, а не уникальная сигнатура CSQTT или доказательство нарушения протокола.
+- Первый байт в диапазоне 0x80–0xBF используется демультиплексированием DTLS-SRTP для классификации RTP/RTCP. Это классификационный диапазон, а не уникальная сигнатура конкретного приложения или доказательство нарушения протокола.
 - RFC 7675 определяет ICE consent freshness через аутентифицированный STUN Binding Request/Response. Это не универсальное требование отправлять такой запрос в каждом произвольном UDP/TURN потоке и не тождественно любому механизму поддержания NAT mapping.
 - Однобайтовый UDP payload 0xFF сам по себе не доказывает нарушение WebRTC или использование конкретного туннеля. Для вывода о его значении нужна спецификация исследуемого клиента/транспорта или захват трафика с подтверждённым контекстом.
-- Строки CQF1, READY_OK, GETCONF: в примерах являются гипотетическими маркерами. Без исходного кода/протокольной спецификации и реального packet capture нельзя утверждать, что они действительно передаются в открытом виде или уникальны для конкретного проекта.
+- Любые предполагаемые открытые маркеры в примерах являются гипотетическими. Без протокольной спецификации и реального packet capture нельзя утверждать, что они действительно передаются в открытом виде или уникальны для конкретного приложения.
 
 ### 21.2. Ошибки и ограничения приведённых фильтров
 
@@ -680,7 +680,7 @@ Ghoncha в целом не считается полноценным VPN до п
 3. Не использовать отсутствие наблюдаемого handshake как основание менять криптографию, отключать проверки или подделывать протокольное состояние.
 4. В диагностике разделять отказ DNS/IP reachability, TURN allocation, ICE/consent, DTLS handshake, SRTP authentication и внутреннего VPN-туннеля.
 5. Проверять false-positive/false-negative только на собственных контролируемых packet captures и тестовых сетях. Не заявлять гарантированную устойчивость к DPI или работу в сетях белых списков.
-6. Не переносить синтаксис этих примеров в production, не строить на нём архитектурные решения и не использовать как основание для заявления о том, что конкретный внешний проект блокируется указанным способом.
+6. Не переносить синтаксис этих примеров в production, не строить на нём архитектурные решения и не делать выводы о блокировке конкретного приложения без воспроизводимых измерений.
 
 
 ## 22. Уточнение состояния после слияния PR №11 (2026-11-07)
@@ -735,70 +735,40 @@ Ghoncha в целом не считается полноценным VPN до п
 - PR №10 остаётся open, HEAD `83e7062658f7964891ea8b2956f44556d7c45362`; CI на этом HEAD не обнаружен. Не объявлять готовым к merge. Его Android TUN lifecycle требует аккуратной интеграции с TURN runtime/PR12 без перезаписи изменений соседней ветки.
 - После завершения PR12 следующий этап — привести PR10 к latest main и выполнить полный CI; затем реализовать service-owned worker с cancellation/join, затем TUN readiness и IP packet router.
 
-## 25. Повторный аудит CSQTT и решения для Ghoncha (2026-11-07)
+## 25. Дополнительные требования к транспортной реализации (2026-11-07)
 
-Проверены актуальная ветка `Afteroid/csqttr` (HEAD `84a2ce84dd4ac0716ceabd1b9a9ae455e6e86806`) и форк `SanityProtocol/csqttr` (HEAD `001caa48e342caac8758db8ed4d12305faea6954`). SanityProtocol — форк Afteroid, а не независимая реализация. На проверенных HEAD совпадают blob SHA критичных файлов `shared/dtls.rs`, `rust-client/turn_core.rs`, `rust-client/obfs.rs`, `rust-server/protocol.rs` и `rust-server/dataplane.rs`; отличия есть в session/turn/worker и интеграционных слоях. Последние коммиты Afteroid 7 ноября относятся преимущественно к сборке серверных бинарников и provenance, а не к изменению DTLS-SRTP wire protocol. Серверный provenance указывает версию 2.5.3, клиентский — 2.5.0. В `PORT.md` остаётся открытая P0-проверка wire matrix, store round trip и реальных phone legs.
+### 25.1. DTLS-SRTP и RTP state
 
-### 25.1. DTLS-SRTP и классификация RTP
+- DTLS handshake устанавливает ассоциацию и экспортирует SRTP keying material; после него media datagrams передаются как RTP/SRTP. Handshake не повторяется перед каждым SRTP-пакетом.
+- Первый байт `0x80` означает RTP version 2 при нулевых P/X/CC битах. Диапазон `0x80..0xBF` сам по себе не доказывает отсутствие предшествующего DTLS handshake. Для вывода необходимы состояние потока и подтверждённая связь с DTLS-SRTP association.
+- Состояния handshake и последующего SRTP data plane должны учитываться раздельно. Не вводить packet-level правило, требующее DTLS handshake перед каждым SRTP packet.
 
-- В режиме DTLS-SRTP DTLS handshake выполняется для установления ассоциации и получения SRTP keying material; после него пользовательские media datagrams передаются как RTP/SRTP. DTLS handshake не повторяется перед каждым SRTP-пакетом.
-- Первый байт `0x80` означает RTP version 2 при нулевых P/X/CC битах и является обычным началом корректного RTP-заголовка. Диапазон `0x80..0xBF` сам по себе не доказывает отсутствие предшествующего DTLS handshake и не классифицирует пакет как orphan SRTP. Для такого вывода необходимы состояние потока и подтверждённая связь с DTLS-SRTP association.
-- Следовательно, не вводить packet-level правило «каждый SRTP packet должен содержать/сопровождаться DTLS handshake». Состояние handshake и состояние последующего SRTP data plane должны учитываться раздельно.
+### 25.2. Обязательные свойства реализации
 
-### 25.2. Результаты source-level проверки
+- Проверять ожидаемую идентичность Gateway по заранее аутентифицированному fingerprint/public key; одной проверки подписи предъявленного сертификата недостаточно.
+- Завершать association и выполнять rekey до исчерпания sequence-number space; запрещать повторное использование GCM nonce.
+- Отклонять trailing partial headers и malformed DTLS/TURN/RTP records, не игнорировать усечённый остаток входного datagram.
+- Согласовывать SRTP profile явно; фактический cipher и длины exporter material должны соответствовать объявленному профилю.
+- Запрещать downgrade на менее защищённый carrier после ошибки handshake. Fallback допускается только при эквивалентной аутентификации и защите внутреннего VPN.
+- Использовать ограниченные nonce/auth retries и отдельные transaction deadlines для allocation, permission и channel lifecycle.
+- Предпочитать event-driven poller без busy polling и коротких sleep loops после WouldBlock.
+- Не записывать credentials, passwords, session salts, keys или пользовательский payload в diagnostics, журналы и метрики.
+- Проверять смешанный трафик small-UDP и bulk flows, несколько allocations, flow affinity и goodput под нагрузкой.
 
-- Клиентский call site вызывает `DtlsClientHandshake::new()` без `pin_fingerprint()`; в DTLS реализации pin опционален. Проверка ECDSA подписи ServerKeyExchange подтверждает владение ключом предъявленного сертификата, но без заранее аутентифицированной привязки не подтверждает ожидаемую идентичность gateway.
-- DTLS `RecordProtector::protect` маскирует счётчик 48-bit record sequence по модулю, а не завершает association/запускает rekey до исчерпания пространства sequence. GCM nonce reuse при переполнении недопустим.
-- Парсеры DTLS record/handshake сообщений завершают цикл при остатке короче заголовка; trailing partial header должен отклоняться, а не молча игнорироваться.
-- Клиент объявляет несколько SRTP profiles, начиная с AES128-CM-SHA1-80. Сервер выбирает первый общий профиль из того же локального списка; key exporter фиксирован на 60 bytes и 14-byte master salts, а data cipher использует AES-CTR/HMAC-SHA1. Не считать AEAD-GCM profile реально поддержанным только на основании его присутствия в ClientHello.
-- Режим AUTO после ошибки DTLS-SRTP переходит на WRAP-SRTP. Это downgrade криптографического профиля; Ghoncha не должен повторять такое поведение. Любой fallback обязан сохранять эквивалентную аутентификацию и защиту внутреннего VPN.
-- TURN core реализует собственные retry/state machine, nonce handling и отдельные deadlines для allocation/permission/channel. Также использует нестандартный STUN attribute `0x8021` со значением `fc 09 b4 6f`. Это VK/CSQTT-specific compatibility detail, не стандартный TURN атрибут; не добавлять его в Ghoncha без подтверждённого packet capture и interoperability test.
-- CSQTT profile использует allocation lifetime 600 s, allocation refresh 300 s, permission/channel maintenance 175 s и keepalive 10 s. Не копировать интервалы: они могут быть частью конкретной PjNATH/VK совместимости и требуют измерений на целевой сети и устройстве.
-- Outbound writer сочетает bounded ArrayQueue/Notify с коротким 50 µs sleep loop после WouldBlock. Для Ghoncha предпочтительнее уже реализованный event-driven poller без busy polling.
-- В diagnostics feature серверный `DpiFrame` сохраняет password и session salt в полях записи/трансляции. Даже если диагностический listener привязан к localhost и feature выключена по умолчанию, это не образец для Ghoncha: секреты не должны попадать в diagnostics, журналы или метрики.
-- `PORT.md` описывает конкретную регрессию, где pinning малых UDP-пакетов на один stream снижал bulk throughput. Использовать это как тестовый сценарий для будущего packet router: смешанные small-UDP и bulk flows, несколько одновременных потоков, per-flow affinity и измерение goodput. Не копировать частные пороги/эвристики без собственных измерений.
+### 25.3. Реализационные решения Ghoncha
 
-### 25.3. Что использовать как архитектурный ориентир
+1. Сохранять portable Sans-I/O TURN core, bounded runtime ownership, event-driven Android poller и flow-affinity model.
+2. В service-owned worker применять cancellation/join, RAII cleanup и bounded graceful shutdown. Не создавать worker на каждый пакет или allocation.
+3. Использовать bounded queues, packet pools и повторное использование буферов только при подтверждённом снижении allocations/copies без ухудшения backpressure и correctness.
+4. Для native/server artifacts формировать provenance manifest: исходный commit, Cargo.lock/input hashes, target/ABI, размер и SHA-256 каждого бинарника.
+5. Реализовывать DTLS-SRTP/SRTP после подтверждения фактического VK Calls media profile, с поддерживаемой реализацией, проверкой Gateway identity, строгой profile negotiation, replay protection и запретом silent downgrade.
 
-- Явная отмена сессий через cancellation token, RAII-регистрация worker/flow, ограниченный graceful-shutdown timeout и гарантированный join/abort при teardown.
-- Bounded queues, packet pool/SPSC ring и повторное использование буферов — только там, где они уменьшают allocations/copies без ухудшения backpressure и correctness.
-- TURN state machine с ограниченными nonce/auth retries, отдельными transaction deadlines и явным retirement allocation при фатальной ошибке.
-- Сборка native/server artifacts с provenance manifest: исходный commit, Cargo.lock/input hashes, target/ABI, размер и SHA-256 каждого бинарника.
-- Диагностика через агрегированные counters/latency histograms без хранения пользовательского payload, credentials, session salts или ключевого материала.
+### 25.4. TCP/TLS transport
 
-### 25.4. Решения для Ghoncha
+- TURN-over-TCP и TURN-over-TLS используют stream framing и требуют корректной обработки split/coalesced frames, partial writes, WouldBlock, EOF/reset и cancellation.
+- Сохранять отдельные состояния raw TCP и TLS; не выполнять silent downgrade с TLS на plaintext.
+- TLS должен проверять hostname и доверенную цепочку, иметь bounded handshake deadline/output и не использовать early data.
+- Android socket adoption должен включать защиту сокета до connect, bind к выбранной Network, проверку типа/состояния сокета и явное владение descriptor.
+- Для TCP runtime использовать stable opaque tokens, bounded per-call work, earliest deadlines и retained unwritten suffix; не создавать task/thread на allocation.
+- UDP остаётся режимом по умолчанию, пока измерения на целевых сетях и устройствах не обоснуют другой выбор.
 
-1. Не переносить custom DTLS, SRTP, WRAP/obfuscation crypto или server dataplane code. Внешние репозитории распространяются по PolyForm Noncommercial License 1.0.0 с обязательными notices и отдельной письменной лицензией для коммерческого использования; использовать только независимые архитектурные идеи, а не копировать исходный код.
-2. Сохранить текущие portable Sans-I/O TURN core, bounded runtime ownership, event-driven Android poller и flow-affinity model. Не заменять их более сложной task/thread-per-allocation архитектурой без измеримого выигрыша.
-3. В следующем service-owned worker этапе применить cancellation/join, RAII cleanup и bounded graceful shutdown. Не использовать короткие sleep loops и не создавать worker на каждый пакет/allocation.
-4. В packet-router этапе добавить throughput regression tests для смешанных small-UDP/bulk flows, нескольких allocations и сетевого handover.
-5. После стабилизации native packaging добавить provenance/SHA-256 manifest для артефактов.
-6. DTLS-SRTP/SRTP реализовывать только после подтверждения реального VK Calls media profile и с maintained implementation, обязательной проверкой gateway identity, строгой profile negotiation, replay protection и запретом silent downgrade.
-
-## 26. LaLune TCP/TLS transport audit (2026-11-07)
-
-Проверены `Endlad2/LaLune` main HEAD `7c6a53f567fc9f12edd92d0193fc87c94dfabc8d` и отдельное ядро `Endlad2/csqtt-core` main HEAD `181a0d9f162bb8040c255496af0aeb8e87c355494`. В публичных деревьях, README, кодовом поиске и релизных заметках не найдено названия/модуля `Gooby`, `Guby` или `Goby`. LaLune UI exposes TURN transport UDP/TCP; core's `TurnTransportMode::TcpTls` accepts `tcp`, `tcp_tls`, `tcp-tls`, `tcp/tls`. Therefore the likely relevant feature is TURN over TCP/TLS, but the user's name "Gooby" is unverified and must not be asserted as a protocol or library.
-
-### 26.1. Что реализовано в LaLune / csqtt-core
-
-- `rust-client/turn_endpoint.rs`: parses `turn:` / `turns:` endpoints and transport URI parameters. TCP mode maps `turn:` endpoints to raw TCP; `turns:` endpoints to TLS; UDP/TCP scheme mismatches and duplicate transport parameters are rejected.
-- `rust-client/turn_stream.rs`: Tokio TCP connect timeout 10 s; TCP_NODELAY; send buffer 32 KiB; TCP keepalive 120 s / 30 s; optional Rustls TLS connector with web PKI roots and hostname verification; bounded control/data queues (32/64); separate stream writer task; incremental TURN control/ChannelData parser with hard frame bounds and TCP padding handling.
-- `rust-client/turn.rs`: chooses Datagram vs Stream control transport; separate UDP and stream driver paths; bounded deadlines for connect, allocation, control and cleanup. Stream writer prioritizes control messages, then multiplexes peer data.
-- LaLune settings expose UDP/TCP choice and default to UDP. CSQTT upstream release notes describe TCP/TLS as experimental fallback for networks restricting UDP, not as the default high-performance mode. Do not assume TCP/TLS is universally faster or more censorship-resistant.
-
-### 26.2. Existing Ghoncha foundation
-
-- Ghoncha already has `crates/transport-turn/src/tcp.rs`: Sans-I/O `TurnTcpEngine`, TURN-over-TCP client adapter, explicit UDP relay allocation semantics (not RFC 6062 TCP relay), bounded input chunks, parser-drain contract, `TurnTcpSendQueue` with retained unwritten suffix for partial TCP writes, and TCP integration roundtrip tests.
-- Ghoncha already has `crates/transport-turn/src/tls.rs`: Sans-I/O Rustls client engine, bounded ciphertext/plaintext, explicit handshake readiness, no TLS 0-RTT, verified plaintext only, caller-driven socket readiness, `TlsStreamSocket`.
-- These are protocol/adapter foundations, not a complete Android production TCP/TLS transport. Current Android runtime integration is UDP-only (`AndroidTurnUdpRuntime` / `AndroidUdpPoller`). There is no equivalent integrated multi-allocation `TurnTcpRuntime`, Android protected TCP socket adoption/poller, or Android TLS configuration/server-name lifecycle yet.
-- Ghoncha's separation of TURN state, TLS state, socket ownership and poller readiness is more suitable for its portable architecture than copying a Tokio task-per-stream design. Preserve Sans-I/O/event-driven ownership and bounded partial-write queues.
-
-### 26.3. Next implementation plan
-
-1. Finish and validate the UDP Android runtime/PR12 and TUN lifecycle/PR10 before adding another transport integration layer.
-2. Add a portable multi-allocation `TurnTcpRuntime` around the existing `TurnTcpDriver`, using stable opaque tokens, bounded per-call work, earliest deadlines, explicit partial-write retention, and no task/thread per allocation.
-3. Add Android protected TCP socket adoption: bind to selected Network and call `VpnService.protect()` before connect; validate stream socket type, connected peer/local tuple, nonblocking mode, descriptor ownership and close lifecycle.
-4. Integrate TLS as a separate optional adapter with DNS hostname verification, maintained trust roots, bounded handshake deadline/output, no early data, and explicit writable/readable interest. Raw TCP and TLS must remain distinct configuration choices; never silently downgrade TLS to plaintext TCP.
-5. Add loopback interoperability tests for split/coalesced STUN and ChannelData, partial writes, WouldBlock, TLS handshake fragmentation, certificate/hostname failures, EOF/reset, cancellation, and bounded shutdown.
-6. Benchmark UDP vs TCP vs TLS over controlled RTT/loss/bandwidth profiles and on Android devices: goodput, p50/p95 latency, head-of-line blocking, CPU, wakeups, memory, and battery. Keep UDP default unless measurements and target-network compatibility justify another profile.
-7. Do not copy LaLune/csqtt-core source. LaLune README states PolyForm Noncommercial License 1.0.0; use only independently designed protocol and lifecycle ideas.
