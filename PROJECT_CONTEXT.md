@@ -373,7 +373,8 @@ CI для проверенного HEAD:
 
 Ветка: `work/heap-backed-turn-queues`  
 Основана на: `work/android-protected-udp-preparation`  
-Состояние: реализация подготовлена; CI/PR review ещё не завершены. Изменения не входят в `main`.
+PR: https://github.com/Ghalgha/Ghoncha/pull/5  
+Состояние: открыт draft; CI ещё не завершён. Изменения не входят в `main`.
 
 - **[В РАБОТЕ]** Перенос фиксированных TURN queue slots из inline arrays в heap-backed `Vec`.
 - **[В РАБОТЕ]** Fallible `try_new()` для очередей и обработка ошибки в `TurnUdpDriver::new`.
