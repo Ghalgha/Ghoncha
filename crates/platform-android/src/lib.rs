@@ -12,13 +12,11 @@ mod android {
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::{Mutex, OnceLock};
 
+    use ghoncha_transport_turn::{DatagramReceive, DatagramSocketError, TurnDatagramSocket};
     use jni::EnvUnowned;
     use jni::errors::ThrowRuntimeExAndDefault;
     use jni::jni_mangle;
     use jni::objects::{JClass, JObject};
-    use ghoncha_transport_turn::{
-        DatagramReceive, DatagramSocketError, TurnDatagramSocket,
-    };
 
     static ANDROID_VERIFIER_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static NEXT_SOCKET_HANDLE: AtomicU32 = AtomicU32::new(1);
@@ -156,8 +154,7 @@ mod android {
     pub fn take_android_udp_socket(
         handle: i64,
     ) -> Result<AndroidUdpSocket, AndroidSocketAdoptionError> {
-        let owned_fd = take_udp_socket(handle)
-            .ok_or(AndroidSocketAdoptionError::UnknownHandle)?;
+        let owned_fd = take_udp_socket(handle).ok_or(AndroidSocketAdoptionError::UnknownHandle)?;
         let socket = UdpSocket::from(owned_fd);
         socket
             .set_nonblocking(true)
@@ -187,10 +184,7 @@ mod android {
             })
         }
 
-        fn recv_from(
-            &mut self,
-            buffer: &mut [u8],
-        ) -> Result<DatagramReceive, DatagramSocketError> {
+        fn recv_from(&mut self, buffer: &mut [u8]) -> Result<DatagramReceive, DatagramSocketError> {
             self.socket
                 .recv_from(buffer)
                 .map(|(len, from)| DatagramReceive {
@@ -241,11 +235,7 @@ mod android {
     /// still be closed by the caller regardless of the result.
     #[jni_mangle("org.ghoncha.app.NativeBootstrap")]
     #[allow(non_snake_case)]
-    pub fn adoptUdpSocket(
-        _unowned_env: EnvUnowned<'_>,
-        _class: JClass<'_>,
-        source_fd: i32,
-    ) -> i64 {
+    pub fn adoptUdpSocket(_unowned_env: EnvUnowned<'_>, _class: JClass<'_>, source_fd: i32) -> i64 {
         duplicate_udp_socket(source_fd)
             .filter(|handle| *handle > 0)
             .unwrap_or(0)
@@ -254,11 +244,7 @@ mod android {
     /// Closes a native UDP handle that has not been transferred to a reactor.
     #[jni_mangle("org.ghoncha.app.NativeBootstrap")]
     #[allow(non_snake_case)]
-    pub fn closeUdpSocket(
-        _unowned_env: EnvUnowned<'_>,
-        _class: JClass<'_>,
-        handle: i64,
-    ) -> bool {
+    pub fn closeUdpSocket(_unowned_env: EnvUnowned<'_>, _class: JClass<'_>, handle: i64) -> bool {
         close_udp_socket(handle)
     }
 
@@ -283,6 +269,6 @@ mod android {
 
 #[cfg(target_os = "android")]
 pub use android::{
-    platform_tls_client_config, take_android_udp_socket, take_udp_socket,
-    AndroidSocketAdoptionError, AndroidUdpSocket,
+    AndroidSocketAdoptionError, AndroidUdpSocket, platform_tls_client_config,
+    take_android_udp_socket, take_udp_socket,
 };
