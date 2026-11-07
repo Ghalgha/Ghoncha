@@ -431,18 +431,14 @@ mod tests {
     #[test]
     fn timer_polling_respects_work_budget_and_rotates_scan_cursor() {
         let mut runtime = TurnUdpRuntime::<MockSocket, 3>::new();
-        runtime
-            .insert(1, 11, driver(40001), MonotonicTime(0))
-            .unwrap();
-        runtime
-            .insert(2, 12, driver(40002), MonotonicTime(0))
-            .unwrap();
-        runtime
-            .insert(3, 13, driver(40003), MonotonicTime(0))
-            .unwrap();
+        let now = MonotonicTime(1_000_000_000);
+        runtime.insert(1, 11, driver(40001), now).unwrap();
+        runtime.insert(2, 12, driver(40002), now).unwrap();
+        runtime.insert(3, 13, driver(40003), now).unwrap();
+
         let mut seen = [false; 4];
         assert_eq!(
-            runtime.poll_due(MonotonicTime(0), 2, |id, _, _| {
+            runtime.poll_due(now, 2, |id, _, _| {
                 seen[usize::from(id)] = true;
             }),
             2
@@ -450,8 +446,9 @@ mod tests {
         assert!(seen[1]);
         assert!(seen[2]);
         assert!(!seen[3]);
+
         assert_eq!(
-            runtime.poll_due(MonotonicTime(0), 2, |id, _, _| {
+            runtime.poll_due(now, 2, |id, _, _| {
                 assert_eq!(id, 3);
             }),
             1
