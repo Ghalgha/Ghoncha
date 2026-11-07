@@ -24,12 +24,12 @@ mod android {
         _class: JClass<'caller>,
         context: JObject<'caller>,
     ) {
-        let result = unowned_env
-            .with_env(|env| rustls_platform_verifier::android::init_with_env(env, context));
-        if result.is_ok() {
+        let outcome = unowned_env.with_env(|env| -> jni::errors::Result<()> {
+            rustls_platform_verifier::android::init_with_env(env, context)?;
             ANDROID_VERIFIER_INITIALIZED.store(true, Ordering::Release);
-        }
-        result.resolve::<ThrowRuntimeExAndDefault>();
+            Ok(())
+        });
+        outcome.resolve::<ThrowRuntimeExAndDefault>();
     }
 
     /// Builds a Rustls client configuration backed by Android's system trust manager.
