@@ -15,7 +15,7 @@ use core::ptr;
 use ghoncha_transport_api::MonotonicTime;
 
 use crate::{
-    DatagramQueueError, TurnReceiveResult, TurnUdpControlPoll, TurnUdpDriver,
+    TurnReceiveResult, TurnUdpControlPoll, TurnUdpDriver,
     TurnUdpDriverError, TurnUdpIoProgress, TurnUdpIoReady,
 };
 
@@ -27,6 +27,13 @@ pub enum TurnUdpRuntimeError {
     DuplicateRegistrationToken,
     UnknownAllocation,
     AllocationFailed,
+}
+
+/// Failure while dispatching an event or payload through the runtime.
+#[derive(Debug)]
+pub enum TurnUdpRuntimeServiceError {
+    Runtime(TurnUdpRuntimeError),
+    Driver(TurnUdpDriverError),
 }
 
 /// One heap-owned driver and its OS-poller registration identity.
@@ -196,7 +203,7 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
         now: MonotonicTime,
         receive_buffer: &mut [u8],
         on_datagram: F,
-    ) -> Result<TurnUdpIoProgress, TurnUdpRuntimeError>
+    ) -> Result<TurnUdpIoProgress, TurnUdpRuntimeServiceError>
     where
         F: for<'a> FnMut(TurnReceiveResult<'a>),
     {
@@ -205,10 +212,10 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
             .iter_mut()
             .flatten()
             .find(|slot| slot.token == token)
-            .ok_or(TurnUdpRuntimeError::UnknownAllocation)?;
+            .ok_or(TurnUdpRuntimeServiceError::Runtime(TurnUdpRuntimeError::UnknownAllocation))?;
         slot.driver
             .service_ready(ready, now, receive_buffer, on_datagram)
-            .map_err(|_| TurnUdpRuntimeError::UnknownAllocation)
+            .map_err(TurnUdpRuntimeServiceError::Driver)
     }
 
     /// Queues one peer payload on an allocation selected by flow affinity.
@@ -219,14 +226,15 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> TurnUdpRuntime<S, CAPA
         payload: &[u8],
         now: MonotonicTime,
         encoded_buffer: &mut [u8],
-    ) -> Result<usize, TurnUdpDriverError> {
+    ) -> Result<usize, TurnUdpRuntimeQueueError> {
         let slot = self
             .slots
             .iter_mut()
             .flatten()
             .find(|slot| slot.id == id)
-            .ok_or(TurnUdpDriverError::Retired)?;
+            .ok_or(TurnUdpRuntimeQueueError::Runtime(TurnUdpRuntimeError::UnknownAllocation))?;
         slot.driver.queue_peer_data(peer, payload, now, encoded_buffer)
+            .map_err(TurnUdpRuntimeQueueError::Driver)
     }
 
     /// Removes a driver after its poller registration has already been
@@ -255,6 +263,13 @@ impl<S: crate::TurnDatagramSocket, const CAPACITY: usize> Default
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Failure to enqueue through a runtime-owned allocation.
+#[derive(Debug)]
+pub enum TurnUdpRuntimeQueueError {
+    Runtime(TurnUdpRuntimeError),
+    Driver(TurnUdpDriverError),
 }
 
 /// Allocates a Box without invoking the infallible Box::new allocation path.
