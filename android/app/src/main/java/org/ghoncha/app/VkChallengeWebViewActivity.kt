@@ -61,7 +61,7 @@ class VkChallengeWebViewActivity : Activity() {
         }
 
         val instructions = TextView(this).apply {
-            text = "Пройдите проверку VK вручную. GHONCHA передаст полученный ответ провайдеру и отдельно проверит его принятие сервером."
+            text = "Пройдите проверку VK вручную. Полученный ответ вернётся в GHONCHA; его принятие необходимо подтвердить отдельным запросом к VK."
             textSize = 14f
             setPadding(20, 16, 20, 8)
         }
