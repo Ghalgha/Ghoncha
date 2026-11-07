@@ -254,7 +254,12 @@ mod android {
             if !readable && !writable {
                 return Err(AndroidPollerError::NoReadinessInterest);
             }
-            if self.registrations.iter().flatten().any(|entry| entry.token == token) {
+            if self
+                .registrations
+                .iter()
+                .flatten()
+                .any(|entry| entry.token == token)
+            {
                 return Err(AndroidPollerError::DuplicateToken);
             }
             let slot = self
