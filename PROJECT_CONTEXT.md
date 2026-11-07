@@ -562,7 +562,7 @@ GHONCHA в целом не считается полноценным VPN до п
 
 ## 20. Последняя проверка и открытые ограничения
 
-Кодовый аудит выполнен на HEAD `0cd727763510f997af3002488195162524d3bd77`. Сам документ добавлен отдельным commit `3346e8acc7d378148521b460941b082fe99c3770` в ту же рабочую ветку `work/android-protected-udp-preparation`.
+Кодовый аудит выполнен на HEAD `0cd727763510f997af3002488195162524d3bd77`. Документ создан и ведётся в той же рабочей ветке `work/android-protected-udp-preparation`.
 
 - PR №4 остаётся открытым draft; merge не выполнен.
 - На указанном HEAD CI check runs завершились успешно: `Format, lint, and test` и `Android debug build`.
