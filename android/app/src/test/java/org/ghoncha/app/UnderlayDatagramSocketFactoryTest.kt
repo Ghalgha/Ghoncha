@@ -15,6 +15,7 @@ class UnderlayDatagramSocketFactoryTest {
         val expectedAddress = InetAddress.getByName("192.0.2.10")
         val factory = UnderlayDatagramSocketFactory(
             networkGeneration = 17,
+            currentNetworkGeneration = { 17L },
             resolveOnNetwork = {
                 calls += "resolve:$it"
                 arrayOf(expectedAddress)
@@ -58,6 +59,7 @@ class UnderlayDatagramSocketFactoryTest {
         var bound = false
         val factory = UnderlayDatagramSocketFactory(
             networkGeneration = 1,
+            currentNetworkGeneration = { 1L },
             resolveOnNetwork = { emptyArray() },
             protect = {
                 protected = true
@@ -78,6 +80,7 @@ class UnderlayDatagramSocketFactoryTest {
         var resolved = false
         val factory = UnderlayDatagramSocketFactory(
             networkGeneration = 1,
+            currentNetworkGeneration = { 1L },
             resolveOnNetwork = {
                 resolved = true
                 throw UnknownHostException(it)
@@ -93,9 +96,46 @@ class UnderlayDatagramSocketFactoryTest {
     }
 
     @Test
+    fun rejectsNetworkThatChangesDuringSocketPreparation() {
+        var currentGeneration = 5L
+        val factory = UnderlayDatagramSocketFactory(
+            networkGeneration = 5,
+            currentNetworkGeneration = { currentGeneration },
+            resolveOnNetwork = { arrayOf(InetAddress.getByName("192.0.2.20")) },
+            protect = { true },
+            bindToNetwork = { currentGeneration = 6L },
+        )
+
+        assertThrows(IllegalStateException::class.java) {
+            factory.open("turn.example.test", 3478)
+        }
+    }
+
+    @Test
+    fun rejectsStaleNetworkBeforeDnsResolution() {
+        var resolved = false
+        val factory = UnderlayDatagramSocketFactory(
+            networkGeneration = 5,
+            currentNetworkGeneration = { 6L },
+            resolveOnNetwork = {
+                resolved = true
+                emptyArray()
+            },
+            protect = { true },
+            bindToNetwork = {},
+        )
+
+        assertThrows(IllegalStateException::class.java) {
+            factory.open("turn.example.test", 3478)
+        }
+        assertFalse(resolved)
+    }
+
+    @Test
     fun rejectsAnyLocalAndMulticastDnsAnswers() {
         val factory = UnderlayDatagramSocketFactory(
             networkGeneration = 1,
+            currentNetworkGeneration = { 1L },
             resolveOnNetwork = {
                 arrayOf(
                     InetAddress.getByName("0.0.0.0"),
