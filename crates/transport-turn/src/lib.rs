@@ -8,6 +8,8 @@
 //! created here.
 
 extern crate alloc;
+
+use alloc::vec::Vec;
 #[cfg(feature = "std")]
 extern crate std;
 
@@ -45,6 +47,7 @@ pub enum TurnError {
     InvalidServerAddress,
     AddressFamilyMismatch,
     TimeOutOfRange,
+    AllocationFailed,
     CreatePermission(CreatePermissionError),
     BindChannel(BindChannelError),
     Delete(DeleteError),
@@ -102,6 +105,10 @@ pub struct PendingDatagram<'a> {
     pub bytes: &'a [u8],
 }
 
+/// Failure to allocate the fixed-capacity backing storage for a TURN queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DatagramQueueAllocationError;
+
 /// Why a datagram could not be added to a bounded send queue.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DatagramQueueError {
@@ -121,17 +128,19 @@ pub enum DatagramQueueError {
     },
 }
 
-/// Fixed-capacity UDP send queue.
+/// Fixed-capacity UDP send queue with heap-backed record storage.
 ///
 /// The front item remains unchanged until `pop_sent` is called after the OS
 /// reports a complete datagram send. A WouldBlock result must leave the item
-/// in place. Both record count and aggregate bytes are bounded at compile time.
+/// in place. Record count and aggregate bytes remain bounded by const parameters;
+/// the backing allocation is made once when the queue is constructed.
 pub struct DatagramSendQueue<
     const CAPACITY: usize,
     const MAX_DATAGRAM: usize,
     const MAX_QUEUED_BYTES: usize,
 > {
-    entries: [Option<QueuedDatagram<MAX_DATAGRAM>>; CAPACITY],
+    entries: Vec<Option<QueuedDatagram<MAX_DATAGRAM>>>,
+
     head: usize,
     len: usize,
     queued_bytes: usize,
@@ -140,13 +149,26 @@ pub struct DatagramSendQueue<
 impl<const CAPACITY: usize, const MAX_DATAGRAM: usize, const MAX_QUEUED_BYTES: usize>
     DatagramSendQueue<CAPACITY, MAX_DATAGRAM, MAX_QUEUED_BYTES>
 {
-    pub fn new() -> Self {
-        Self {
-            entries: core::array::from_fn(|_| None),
+    /// Creates bounded queue storage on the heap, returning allocation failure
+    /// instead of constructing a large inline array on the caller's stack.
+    pub fn try_new() -> Result<Self, DatagramQueueAllocationError> {
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(CAPACITY)
+            .map_err(|_| DatagramQueueAllocationError)?;
+        entries.resize_with(CAPACITY, || None);
+        Ok(Self {
+            entries,
             head: 0,
             len: 0,
             queued_bytes: 0,
-        }
+        })
+    }
+
+    /// Creates bounded heap storage and panics only if allocation fails.
+    /// Runtime construction should use `try_new` and handle the error.
+    pub fn new() -> Self {
+        Self::try_new().expect("TURN datagram queue allocation failed")
     }
 
     pub const fn len(&self) -> usize {
@@ -316,12 +338,19 @@ impl<
         PEER_MAX_BYTES,
     >
 {
-    pub fn new() -> Self {
-        Self {
-            control: DatagramSendQueue::new(),
-            peer_data: DatagramSendQueue::new(),
+    /// Allocates both bounded queue stores on the heap.
+    pub fn try_new() -> Result<Self, DatagramQueueAllocationError> {
+        Ok(Self {
+            control: DatagramSendQueue::try_new()?,
+            peer_data: DatagramSendQueue::try_new()?,
             consecutive_control_sends: 0,
-        }
+        })
+    }
+
+    /// Creates bounded heap storage and panics only if allocation fails.
+    /// Runtime construction should use `try_new` and handle the error.
+    pub fn new() -> Self {
+        Self::try_new().expect("TURN send queue allocation failed")
     }
 
     fn ensure_control_capacity(&self, maximum_datagram: usize) -> Result<(), DatagramQueueError> {
@@ -871,10 +900,11 @@ impl<
         password: &str,
     ) -> Result<Self, TurnError> {
         let engine = TurnUdpEngine::new(socket.local_addr(), server_addr, username, password)?;
+        let queues = TurnUdpSendQueues::try_new().map_err(|_| TurnError::AllocationFailed)?;
         Ok(Self {
             socket,
             engine,
-            queues: TurnUdpSendQueues::new(),
+            queues,
             retired: false,
         })
     }
@@ -1238,6 +1268,34 @@ mod tests {
 
     fn destination() -> SocketAddr {
         "198.51.100.1:3478".parse().unwrap()
+    }
+
+    #[test]
+    fn large_queue_storage_is_heap_backed_and_keeps_its_fixed_capacity() {
+        let queue = DatagramSendQueue::<256, 2048, 262_144>::try_new().unwrap();
+
+        assert_eq!(queue.entries.len(), 256);
+        assert!(queue.entries.capacity() >= 256);
+        assert!(core::mem::size_of_val(&queue) <= 64);
+    }
+
+    #[test]
+    fn send_queue_set_allocates_both_bounded_stores() {
+        let queues = TurnUdpSendQueues::<32, 256, 2048, 16_384, 262_144>::try_new()
+            .expect("bounded queue backing storage should allocate");
+
+        assert_eq!(queues.control.entries.len(), 32);
+        assert_eq!(queues.peer_data.entries.len(), 256);
+        assert_eq!(queues.control.queued_bytes(), 0);
+        assert_eq!(queues.peer_data.queued_bytes(), 0);
+    }
+
+    #[test]
+    fn queue_allocation_failure_is_reported_without_panicking() {
+        assert_eq!(
+            DatagramSendQueue::<{ usize::MAX }, 1, 1>::try_new().err(),
+            Some(DatagramQueueAllocationError)
+        );
     }
 
     #[test]
