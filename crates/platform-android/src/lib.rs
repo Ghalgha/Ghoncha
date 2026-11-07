@@ -21,6 +21,8 @@ mod android {
     static ANDROID_VERIFIER_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static NEXT_SOCKET_HANDLE: AtomicU32 = AtomicU32::new(1);
     static UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, OwnedFd>>> = OnceLock::new();
+    static ADOPTED_UDP_SOCKETS: OnceLock<Mutex<HashMap<i64, AndroidUdpSocket>>> =
+        OnceLock::new();
 
     const F_GETFD: c_int = 1;
     const F_SETFD: c_int = 2;
@@ -70,6 +72,46 @@ mod android {
 
     fn socket_table() -> &'static Mutex<HashMap<i64, OwnedFd>> {
         UDP_SOCKETS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    fn adopted_socket_table() -> &'static Mutex<HashMap<i64, AndroidUdpSocket>> {
+        ADOPTED_UDP_SOCKETS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Consumes a pending descriptor handle and stores the owned socket in the
+    /// native TURN socket registry. The caller's Kotlin token is now inert.
+    fn consume_udp_socket(handle: i64) -> bool {
+        let Ok(socket) = take_android_udp_socket(handle) else {
+            return false;
+        };
+        let Ok(mut sockets) = adopted_socket_table().lock() else {
+            return false;
+        };
+        if sockets.contains_key(&handle) {
+            return false;
+        }
+        sockets.insert(handle, socket);
+        true
+    }
+
+    /// Removes an adopted socket that has not yet been moved into a TURN driver.
+    fn close_adopted_udp_socket(handle: i64) -> bool {
+        if handle <= 0 {
+            return false;
+        }
+        adopted_socket_table()
+            .lock()
+            .ok()
+            .and_then(|mut sockets| sockets.remove(&handle))
+            .is_some()
+    }
+
+    /// Moves a consumed socket into the native TURN runtime.
+    pub fn take_adopted_udp_socket(handle: i64) -> Option<AndroidUdpSocket> {
+        if handle <= 0 {
+            return None;
+        }
+        adopted_socket_table().lock().ok()?.remove(&handle)
     }
 
     /// Duplicates and validates an Android UDP socket descriptor.
@@ -518,6 +560,21 @@ mod android {
         close_udp_socket(handle)
     }
 
+    /// Consumes a pending handle and moves the protected UDP socket into
+    /// native ownership. It is now available to a native TURN runtime.
+    #[jni_mangle("org.ghoncha.app.NativeBootstrap")]
+    #[allow(non_snake_case)]
+    pub fn consumeUdpSocket(_unowned_env: EnvUnowned<'_>, _class: JClass<'_>, handle: i64) -> bool {
+        consume_udp_socket(handle)
+    }
+
+    /// Closes a socket consumed by Rust but not yet attached to a TURN driver.
+    #[jni_mangle("org.ghoncha.app.NativeBootstrap")]
+    #[allow(non_snake_case)]
+    pub fn closeAdoptedUdpSocket(_unowned_env: EnvUnowned<'_>, _class: JClass<'_>, handle: i64) -> bool {
+        close_adopted_udp_socket(handle)
+    }
+
     /// Builds a Rustls client configuration backed by Android's system trust manager.
     ///
     /// Must only be called after initialization completed successfully. The returned
@@ -540,5 +597,6 @@ mod android {
 #[cfg(target_os = "android")]
 pub use android::{
     AndroidPollEvent, AndroidPollerError, AndroidSocketAdoptionError, AndroidUdpPoller,
-    AndroidUdpSocket, platform_tls_client_config, take_android_udp_socket, take_udp_socket,
+    AndroidUdpSocket, platform_tls_client_config, take_adopted_udp_socket,
+    take_android_udp_socket, take_udp_socket,
 };
