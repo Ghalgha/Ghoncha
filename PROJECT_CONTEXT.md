@@ -359,6 +359,7 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/4
 - **[РЕАЛИЗОВАНО В PR]** Android UDP socket adapter, реализующий TURN datagram socket contract.
 - **[РЕАЛИЗОВАНО В PR]** Fixed-capacity `poll(2)` readiness poller с registration tokens и unregister-before-close semantics.
 - **[РЕАЛИЗОВАНО В PR]** TURN UDP control deadline exposure и расчёт bounded wait duration для reactor.
+- **[РЕАЛИЗОВАНО В PR №5]** Heap-backed bounded TURN send queues; `TurnUdpDriver::new` использует fallible allocation и возвращает `AllocationFailed`, сохраняя прежние лимиты очередей.
 - **[РЕАЛИЗОВАНО В PR]** Документированный Android UDP socket contract.
 - **[ЧАСТИЧНО]** Native socket lifecycle подготовлен, но не подключён к persistent multi-allocation TURN runtime.
 - **[НЕ РЕАЛИЗОВАНО]** Android `VpnService`, TUN lifecycle, TURN driver orchestration, единый reactor TUN/TURN/TLS и end-to-end tunnel.
@@ -368,12 +369,22 @@ CI для проверенного HEAD:
 - **[РЕАЛИЗОВАНО / CI PASS]** Android debug build — success.
 - CI не заменяет device/instrumentation tests и live network interoperability.
 
-### 14.3. Другие открытые изменения
+### 14.3. Следующая рабочая ветка — heap-backed TURN queues
+
+Ветка: `work/heap-backed-turn-queues`  
+Основана на: `work/android-protected-udp-preparation`  
+Состояние: реализация подготовлена; CI/PR review ещё не завершены. Изменения не входят в `main`.
+
+- **[В РАБОТЕ]** Перенос фиксированных TURN queue slots из inline arrays в heap-backed `Vec`.
+- **[В РАБОТЕ]** Fallible `try_new()` для очередей и обработка ошибки в `TurnUdpDriver::new`.
+- **[В РАБОТЕ]** Тесты на ограниченную ёмкость, небольшой inline размер структуры и отказ allocation.
+
+### 14.4. Другие открытые изменения
 
 - PR №2 — TURN graceful drain и flow-affinity lookup. Открыт, не слит. Не считать частью `main` или ветки PR №4, пока это отдельно не подтверждено merge/commit history.
 - PR №3 — дополнительная валидация IPv6 extension chains. Открыт, не слит. Не считать частью `main` или ветки PR №4, пока это отдельно не подтверждено merge/commit history.
 
-Не создавать новые PR без прямого указания пользователя. Продолжать работу в уже выбранной рабочей ветке, пока не дано иное распоряжение. Не сливать PR без явного разрешения пользователя.
+Создавать отдельный PR, когда граница изменения и зависимость от предыдущего этапа делают review/merge логичнее; допускаются stacked PR с явным base. Не создавать PR только ради формальности. Не сливать PR без явного разрешения пользователя.
 
 ## 15. Критические отсутствующие части
 
