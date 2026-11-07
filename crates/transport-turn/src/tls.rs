@@ -113,7 +113,10 @@ impl TlsClientEngine {
     /// Application data is safe to send only after the handshake is complete
     /// and all final handshake bytes have been flushed to the socket.
     pub fn application_data_ready(&self) -> bool {
-        !self.connection.is_handshaking() && !self.connection.wants_write()
+        !self.output_failed
+            && self.pending_offset == self.pending_ciphertext.len()
+            && !self.connection.is_handshaking()
+            && !self.connection.wants_write()
     }
 
     pub const fn peer_closed(&self) -> bool {
@@ -126,6 +129,9 @@ impl TlsClientEngine {
         &mut self,
         ciphertext: &[u8],
     ) -> Result<TlsReadProgress, TlsEngineError> {
+        if self.output_failed {
+            return Err(TlsEngineError::OutputFailed);
+        }
         if ciphertext.is_empty() {
             return Err(TlsEngineError::EmptyCiphertext);
         }
@@ -195,10 +201,7 @@ impl TlsClientEngine {
     /// Stages pending TLS records into a bounded buffer, then copies a
     /// caller-sized prefix. This avoids partially writing a TLS record into a
     /// too-small caller buffer and accidentally replaying its prefix.
-    pub fn drain_ciphertext(
-        &mut self,
-        output: &mut [u8],
-    ) -> Result<usize, TlsEngineError> {
+    pub fn drain_ciphertext(&mut self, output: &mut [u8]) -> Result<usize, TlsEngineError> {
         if self.output_failed {
             return Err(TlsEngineError::OutputFailed);
         }
