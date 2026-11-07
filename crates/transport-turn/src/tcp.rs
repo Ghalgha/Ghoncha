@@ -1114,10 +1114,10 @@ mod driver_tests {
             Err(TurnTcpDriverError::Turn(TurnTcpError::BufferedDataPending))
         ));
         assert!(driver.poll_peer_data(MonotonicTime(2)).unwrap().is_none());
-        assert_eq!(
+        assert!(matches!(
             driver.receive_one(&mut buffer, MonotonicTime(3)).unwrap(),
             TurnTcpDriverReceive::WouldBlock
-        );
+        ));
     }
 
     #[test]
