@@ -301,7 +301,10 @@ impl<const CAPACITY: usize> FlowDispatcher<CAPACITY> {
 
     /// Returns the number of currently occupied flow entries.
     pub fn len(&self) -> usize {
-        self.entries.iter().filter(|entry| matches!(entry, Slot::Occupied(_))).count()
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry, Slot::Occupied(_)))
+            .count()
     }
 
     pub fn is_empty(&self) -> bool {
