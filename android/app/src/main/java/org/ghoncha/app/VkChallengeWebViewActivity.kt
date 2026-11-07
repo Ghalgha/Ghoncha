@@ -194,7 +194,7 @@ class VkChallengeWebViewActivity : Activity() {
             !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
         ) {
             status.text =
-                "Автопередача ответа недоступна в этой версии WebView. Завершите проверку и вернитесь в GHONCHA."
+                "Эта версия Android System WebView не поддерживает безопасную передачу ответа. Обновите WebView и повторите проверку."
             return
         }
 
@@ -246,7 +246,7 @@ class VkChallengeWebViewActivity : Activity() {
                 messageBridgeInstalled = false
             }
             status.text =
-                "Автопередача ответа недоступна. Завершите проверку и вернитесь в GHONCHA."
+                "Не удалось установить защищённый канал передачи ответа. Обновите Android System WebView и повторите проверку."
         }
     }
 
@@ -329,10 +329,10 @@ class VkChallengeWebViewActivity : Activity() {
 
                 try {
                   const parsed = JSON.parse(body);
-                  const token = parsed &&
-                    parsed.data &&
-                    parsed.data.response &&
-                    parsed.data.response.success_token;
+                  const token =
+                    (parsed && parsed.response && parsed.response.success_token) ||
+                    (parsed && parsed.response && parsed.response.response && parsed.response.response.success_token) ||
+                    (parsed && parsed.data && parsed.data.response && parsed.data.response.success_token);
                   if (typeof token === "string" &&
                       token.length > 0 &&
                       token.length <= $MAX_TOKEN_LENGTH &&
