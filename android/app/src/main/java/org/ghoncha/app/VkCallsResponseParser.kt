@@ -108,7 +108,7 @@ internal object VkCallsResponseParser {
             if (
                 endpoint.host.isNullOrBlank() ||
                 endpoint.userInfo != null ||
-                endpoint.port !in -1..65535
+                (endpoint.port != -1 && endpoint.port !in 1..65535)
             ) return null
             result += value
         }
