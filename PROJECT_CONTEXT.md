@@ -1,4 +1,4 @@
-# GHONCHA — PROJECT_CONTEXT
+# Ghoncha — PROJECT_CONTEXT
 
 > **Назначение:** единый актуальный контекст проекта для разработчиков и AI-агентов. Этот файл определяет цель, архитектурные границы, подтверждённое состояние реализации, порядок дальнейшей работы и обязательные инженерные правила.
 >
@@ -21,7 +21,7 @@
 
 ## 1. Цель продукта
 
-GHONCHA — кроссплатформенный VPN. Его основной сетевой путь должен использовать VK Calls TURN как транспорт для передачи VPN-трафика между клиентом GHONCHA и собственным VPN-шлюзом пользователя/сервиса.
+Ghoncha — кроссплатформенный VPN. Его основной сетевой путь должен использовать VK Calls TURN как транспорт для передачи VPN-трафика между клиентом Ghoncha и собственным VPN-шлюзом пользователя/сервиса.
 
 VK Calls — это **транспортная среда**, а не назначение приложения. Продукт не является приложением для голосовых или видеозвонков и не должен смещать архитектуру в сторону управления звонками как конечной функции.
 
@@ -29,12 +29,12 @@ VK Calls — это **транспортная среда**, а не назна�
 1. Перехватывать IP-трафик устройства через системный VPN-интерфейс.
 2. Защищать его стандартным криптографическим VPN-протоколом.
 3. Передавать защищённые записи через выбранный транспорт; основной вариант — VK Calls TURN.
-4. Доставлять записи на собственный GHONCHA Gateway.
+4. Доставлять записи на собственный Ghoncha Gateway.
 5. Проверять подлинность, расшифровывать VPN-трафик и маршрутизировать IP-пакеты.
 6. Возвращать ответы тем же логическим путём.
 7. Обеспечивать безопасное переключение сетей, восстановление соединения и управление собственным сервером.
 
-Продукт должен иметь собственную архитектуру, собственные интерфейсы, модель состояния, систему конфигурации, серверную часть и пользовательский опыт. Нельзя копировать структуру, код, UX или ограничения какого-либо существующего приложения. Внешние реализации допустимо изучать только как технические источники для проверки протокольной совместимости; они не являются спецификацией GHONCHA.
+Продукт должен иметь собственную архитектуру, собственные интерфейсы, модель состояния, систему конфигурации, серверную часть и пользовательский опыт. Нельзя копировать структуру, код, UX или ограничения какого-либо существующего приложения. Внешние реализации допустимо изучать только как технические источники для проверки протокольной совместимости; они не являются спецификацией Ghoncha.
 
 ## 2. Принципы проекта
 
@@ -60,7 +60,7 @@ VK Calls — это **транспортная среда**, а не назна�
 - **Transport API** — общий контракт передачи полных непрозрачных записей.
 - **Transport Adapters** — реализации VK Calls TURN, generic TURN и будущих транспортов.
 - **Credential Providers** — отдельные компоненты получения и обновления краткоживущих учётных данных. Получение credentials не должно выполняться в packet hot path.
-- **GHONCHA Gateway** — серверное завершение VPN-туннеля, маршрутизация, NAT/forwarding и применение политик.
+- **Ghoncha Gateway** — серверное завершение VPN-туннеля, маршрутизация, NAT/forwarding и применение политик.
 - **Server Control Plane** — настройка шлюза, управление пользователями/peer-ами, ключами, адресами, лимитами, версиями и состоянием сервера.
 - **Management/Deployment** — безопасное развёртывание и обслуживание собственного сервера из приложения.
 
@@ -77,7 +77,7 @@ Device application
        -> TURN client
        -> DTLS-SRTP / RTP-SRTP carrier for the VK path
        -> VK Calls TURN relay
-  -> GHONCHA Gateway UDP endpoint
+  -> Ghoncha Gateway UDP endpoint
   -> SRTP verification/deprotection on the VK path
   -> VPN Tunnel Engine
   -> IP forwarding / NAT / policy
@@ -90,7 +90,7 @@ Device application
 
 На основном VK-пути должны быть независимо реализованы и проверены:
 - краткоживущие TURN credentials и аутентификация TURN allocation;
-- проверка подлинности GHONCHA Gateway;
+- проверка подлинности Ghoncha Gateway;
 - DTLS-SRTP handshake и согласование допустимого SRTP-профиля;
 - SRTP integrity, шифрование и replay protection;
 - внутренняя VPN-аутентификация и защита IP-трафика.
@@ -101,7 +101,7 @@ TURN username/password, VK call link/hash, DTLS identity, SRTP keys и VPN peer 
 
 ## 4. VPN-протокол и WireGuard
 
-**[ТРЕБУЕТ РЕШЕНИЯ]** WireGuard рассматривается как основной кандидат на внутренний VPN-протокол GHONCHA. Это не транспорт VK Calls и не замена TURN.
+**[ТРЕБУЕТ РЕШЕНИЯ]** WireGuard рассматривается как основной кандидат на внутренний VPN-протокол Ghoncha. Это не транспорт VK Calls и не замена TURN.
 
 Ожидаемая роль внутреннего VPN-протокола:
 - peer identity и криптографическая аутентификация;
@@ -234,7 +234,7 @@ VK Calls должен использоваться как основной ис�
 - тестировать только реально наблюдаемые адреса, порты, протоколы и направления;
 - различать DNS failure, timeout, TCP connect failure, TLS validation failure, TURN auth failure и peer handshake failure;
 - не делать вывод о блокировке по одному timeout;
-- не считать успешный доступ к VK доказательством доступности GHONCHA Gateway;
+- не считать успешный доступ к VK доказательством доступности Ghoncha Gateway;
 - не использовать hostname/port как единственное основание выбора транспорта;
 - не заявлять «обход гарантирован» без тестов на конкретной сети и конфигурации;
 - fallback допускается только на заранее настроенный и проверенный транспорт, а не на произвольный endpoint;
@@ -274,7 +274,7 @@ Rust Core должен оставаться платформенно-нейтр�
 
 ## 12. Собственный сервер и развёртывание
 
-GHONCHA должен предоставлять собственный Gateway и возможность развёрнуть его на VPS непосредственно из приложения.
+Ghoncha должен предоставлять собственный Gateway и возможность развёрнуть его на VPS непосредственно из приложения.
 
 ### Функции управления
 - подключение к VPS по SSH с явным подтверждением пользователя;
@@ -297,7 +297,7 @@ GHONCHA должен предоставлять собственный Gateway �
 - После deploy выполняются health checks: процесс, сокеты, firewall, peer config и end-to-end tunnel test.
 - Control Plane и packet forwarding должны быть разделены; управление сервером не должно блокировать data plane.
 
-**Состояние:** [НЕ РЕАЛИЗОВАНО] На проверенном HEAD нет GHONCHA Gateway, SSH deploy workflow, server manager или полноценного server control plane.
+**Состояние:** [НЕ РЕАЛИЗОВАНО] На проверенном HEAD нет Ghoncha Gateway, SSH deploy workflow, server manager или полноценного server control plane.
 
 ## 13. UI и пользовательские функции
 
@@ -306,7 +306,7 @@ GHONCHA должен предоставлять собственный Gateway �
 - выбор трёх профилей производительности;
 - ручное добавление/импорт VK call link/hash;
 - автоматическая авторизация VK и получение параметров сессии;
-- выбор/настройка GHONCHA Gateway;
+- выбор/настройка Ghoncha Gateway;
 - создание и управление собственным сервером;
 - диагностика текущего транспорта, состояния туннеля и причины ошибки;
 - статистика трафика, задержки, потерь и фактического числа flows;
@@ -436,7 +436,7 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/10
 8. Реальный VK TURN interoperability и корректная обработка credential refresh/expiry.
 9. DTLS-SRTP handshake, gateway identity verification, RTP/SRTP protect/unprotect и replay handling.
 10. Выбор и интеграция VPN tunnel engine.
-11. GHONCHA Gateway, peer provisioning, forwarding/NAT/firewall и server control plane.
+11. Ghoncha Gateway, peer provisioning, forwarding/NAT/firewall и server control plane.
 12. SSH deployment/upgrade/rollback и server lifecycle management в приложении.
 13. UI, live profile switching и end-to-end diagnostics.
 14. Дополнительные transport adapters.
@@ -484,7 +484,7 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/10
 - затем DTLS-SRTP/SRTP и gateway identity;
 - после этого live TURN interoperability и end-to-end packet flow.
 
-### Этап F — GHONCHA Gateway
+### Этап F — Ghoncha Gateway
 - определить peer provisioning и config format;
 - реализовать Gateway data plane;
 - добавить forwarding/NAT/firewall policy;
@@ -594,7 +594,7 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/10
 - PROJECT_CONTEXT.md обновлён;
 - нет ложного заявления о production readiness.
 
-GHONCHA в целом не считается полноценным VPN до прохождения end-to-end сценария: установка/запуск клиента → разрешение VPN → TUN → защищённый tunnel engine → VK Calls TURN transport → аутентифицированный GHONCHA Gateway → маршрутизация IPv4/IPv6 → обратный трафик → корректное восстановление после network handover.
+Ghoncha в целом не считается полноценным VPN до прохождения end-to-end сценария: установка/запуск клиента → разрешение VPN → TUN → защищённый tunnel engine → VK Calls TURN transport → аутентифицированный Ghoncha Gateway → маршрутизация IPv4/IPv6 → обратный трафик → корректное восстановление после network handover.
 
 ## 19. Источники технических требований
 
