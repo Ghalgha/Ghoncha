@@ -21,6 +21,17 @@ internal class NativeUdpSocketHandle internal constructor(
         require(it > 0) { "Native UDP handle must be positive" }
     })
 
+    /**
+     * Moves the opaque token to a JNI call that will consume it with
+     * take_android_udp_socket(). The returned token must be consumed or closed
+     * by native code; this wrapper becomes inert after transfer.
+     */
+    fun transferToRust(): Long {
+        val value = handle.getAndSet(0)
+        check(value > 0) { "Native UDP handle was already transferred or closed" }
+        return value
+    }
+
     override fun close() {
         val value = handle.getAndSet(0)
         if (value != 0L) {
