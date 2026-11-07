@@ -365,7 +365,7 @@ CI PR №4 прошёл: Rust format/Clippy/workspace tests и Android debug bui
 Ветка: `work/heap-backed-turn-queues-main`  
 HEAD: `0f0d2c9972eb97d1e4391f36bea1de99c69e7d86`  
 PR: https://github.com/Ghalgha/Ghoncha/pull/8  
-Основан непосредственно на `main`. Состояние: открыт draft; **CI PASS**; не слит.
+Основан непосредственно на `main`. Состояние: открыт, ready for review; **CI PASS**; не слит.
 
 - **[РЕАЛИЗОВАНО В PR №8]** Heap-backed bounded TURN send queues с сохранением compile-time record/byte limits.
 - **[РЕАЛИЗОВАНО В PR №8]** Fallible queue allocation и `TurnError::AllocationFailed` в `TurnUdpDriver::new`.
@@ -377,22 +377,23 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/8
 Ветка: `work/android-underlay-network-monitor-main`  
 HEAD: `62e7a65a5c7df79f4a96a7c5fb422b6921ab661d`  
 PR: https://github.com/Ghalgha/Ghoncha/pull/9  
-Основан непосредственно на `main`. Состояние: открыт draft; Rust format/Clippy/workspace tests прошли; Android JVM/build pipeline выполняется; не слит.
+Основан непосредственно на `main`. Состояние: открыт, ready for review; **все CI задачи прошли**; не слит.
 
 - **[РЕАЛИЗОВАНО В PR №9]** Монитор кандидатов с `NET_CAPABILITY_INTERNET` и `NET_CAPABILITY_NOT_VPN`; автоматический выбор preferred network намеренно не выполняется.
 - **[РЕАЛИЗОВАНО В PR №9]** Snapshot capabilities, validation, metering и transport flags.
 - **[РЕАЛИЗОВАНО В PR №9]** Monotonic per-network generation invalidation при изменении capabilities/link properties и потере сети.
 - **[РЕАЛИЗОВАНО В PR №9]** Unit tests для generation registry.
-- CI trigger расширен для следующей stacked ветки PR №10.
+- В PR №9 добавлен CI trigger для следующей stacked ветки PR №10.
+- PR содержит 5 файлов, включая workflow trigger.
 - Device-level handover не проверен.
 - PR №7 закрыт без слияния; PR №9 — чистая main-based замена.
 
 ### 14.5. PR №10 — Android VpnService и TUN descriptor lifecycle
 
 Ветка: `work/android-vpnservice-tun-lifecycle-v2`  
-HEAD: `f01b6f4426dcaaed633301cd48b46554022b0b06`  
+HEAD: `a91a56966295770141d98bcc30d78aa6fd9a5489`  
 PR: https://github.com/Ghalgha/Ghoncha/pull/10  
-Основан на PR №9 (stacked). Состояние: открыт draft; CI выполняется; не слит.
+Основан на PR №9 (stacked). Состояние: открыт draft; Rust format/Clippy/workspace tests прошли; Android debug build выполняется; не слит.
 
 - **[РЕАЛИЗОВАНО В PR №10]** Android `VpnService` declaration, VPN consent flow и foreground notification lifecycle.
 - **[РЕАЛИЗОВАНО В PR №10]** Локальный TUN с IPv4 host address, без IP routes и без перехвата пользовательского трафика.
@@ -601,7 +602,7 @@ GHONCHA в целом не считается полноценным VPN до п
 Кодовый аудит обновлён после merge PR №4 (`202af0e618c1da676add6912c99afd7a61f1bb30`). `PROJECT_CONTEXT.md` является каноническим документом и редактируется только в корне ветки `main`; не добавлять его в PR diff и не вносить в него изменения из рабочих веток. Изменения контекста вносить непосредственно в `main`.
 
 - PR №4 слит в main; CI на его HEAD прошёл.
-- PR №8 CI прошёл полностью; PR №9 и PR №10 ожидают завершения Android CI.
+- PR №8 и PR №9 CI прошли полностью; PR №10: Rust CI прошёл, Android debug build выполняется.
 - Успешный CI не доказывает работу на физическом устройстве, совместимость с живым VK TURN relay, корректность маршрута в ограниченной сети или наличие end-to-end VPN.
 - PR №2 и PR №3 остаются отдельными открытыми изменениями и не включены в статус `main`.
 - `PROJECT_CONTEXT.md` — единственная каноническая копия в `main`; отсутствие этого файла в остальных ветках является намеренным.
