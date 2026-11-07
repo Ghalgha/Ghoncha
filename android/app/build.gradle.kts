@@ -71,17 +71,63 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    sourceSets.getByName("main").jniLibs.srcDir(
+        layout.buildDirectory.dir("generated/rustJniLibs"),
+    )
 }
 
 dependencies {
     implementation("rustls:rustls-platform-verifier")
 }
 
+val rustWorkspaceDir = rootProject.projectDir.parentFile
+val rustJniLibsDir = layout.buildDirectory.dir("generated/rustJniLibs")
+
 val cargoMetadata = tasks.register<Exec>("cargoMetadata") {
-    workingDir = rootProject.projectDir.parentFile
+    workingDir = rustWorkspaceDir
     commandLine("cargo", "metadata", "--format-version", "1")
 }
 
+val installRustAndroidTargets = tasks.register<Exec>("installRustAndroidTargets") {
+    workingDir = rustWorkspaceDir
+    commandLine(
+        "rustup",
+        "target",
+        "add",
+        "aarch64-linux-android",
+        "armv7-linux-androideabi",
+        "x86_64-linux-android",
+        "i686-linux-android",
+    )
+}
+
+val buildRustAndroid = tasks.register<Exec>("buildRustAndroid") {
+    dependsOn(cargoMetadata, installRustAndroidTargets)
+    workingDir = rustWorkspaceDir
+    commandLine(
+        "cargo",
+        "ndk",
+        "-P",
+        "26",
+        "-t",
+        "arm64-v8a",
+        "-t",
+        "armeabi-v7a",
+        "-t",
+        "x86_64",
+        "-t",
+        "x86",
+        "-o",
+        rustJniLibsDir.get().asFile.absolutePath,
+        "build",
+        "--release",
+        "--locked",
+        "--package",
+        "ghoncha-platform-android",
+    )
+}
+
 tasks.named("preBuild") {
-    dependsOn(cargoMetadata)
+    dependsOn(buildRustAndroid)
 }
