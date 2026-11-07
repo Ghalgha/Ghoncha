@@ -625,9 +625,13 @@ mod tests {
         let socket =
             TlsStreamSocket::new(mock_stream(usize::MAX), client_config(), server_name()).unwrap();
         let server = "198.51.100.1:443".parse().unwrap();
-        let mut driver =
-            crate::TurnTcpDriver::<_, 2, 4096, 8192>::new(socket, server, "test-user", "test-password")
-                .unwrap();
+        let mut driver = crate::TurnTcpDriver::<_, 2, 4096, 8192>::new(
+            socket,
+            server,
+            "test-user",
+            "test-password",
+        )
+        .unwrap();
 
         let poll = driver
             .poll_control_with_deadline(crate::MonotonicTime(1))
