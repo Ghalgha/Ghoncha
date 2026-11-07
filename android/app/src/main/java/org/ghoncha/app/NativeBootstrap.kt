@@ -25,4 +25,16 @@ object NativeBootstrap {
     /** Closes a Rust-owned socket that has not yet entered a TURN driver. */
     @JvmStatic
     external fun closeAdoptedUdpSocket(handle: Long): Boolean
+
+    /**
+     * Takes ownership of a detached VpnService TUN file descriptor.
+     * The descriptor is consumed and closed by native code on both success
+     * and failure; the caller must never close it after this call.
+     */
+    @JvmStatic
+    external fun adoptTunInterface(detachedFd: Int): Long
+
+    /** Closes a TUN descriptor that has not yet entered the native packet runtime. */
+    @JvmStatic
+    external fun closeTunInterface(handle: Long): Boolean
 }
