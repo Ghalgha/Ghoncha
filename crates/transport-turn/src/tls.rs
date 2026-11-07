@@ -272,3 +272,86 @@ impl Write for BoundedVecWriter<'_> {
         Ok(())
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustls::RootCertStore;
+
+    fn client_config() -> Arc<ClientConfig> {
+        Arc::new(
+            ClientConfig::builder()
+                .with_root_certificates(RootCertStore::empty())
+                .with_no_client_auth(),
+        )
+    }
+
+    fn server_name() -> ServerName<'static> {
+        ServerName::try_from("turn.example.test").expect("valid DNS server name")
+    }
+
+    #[test]
+    fn client_hello_is_emitted_without_blocking_io() {
+        let mut engine = TlsClientEngine::new(client_config(), server_name()).unwrap();
+
+        assert!(engine.is_handshaking());
+        assert!(engine.wants_write());
+        assert!(!engine.application_data_ready());
+
+        let mut output = [0_u8; 4096];
+        let written = engine.drain_ciphertext(&mut output).unwrap();
+
+        assert!(written > 0);
+        assert!(!engine.wants_write());
+        assert!(engine.is_handshaking());
+        assert!(!engine.application_data_ready());
+    }
+
+    #[test]
+    fn partial_ciphertext_drain_remains_writable_until_fully_taken() {
+        let mut engine = TlsClientEngine::new(client_config(), server_name()).unwrap();
+        let mut first = [0_u8; 1];
+
+        assert_eq!(engine.drain_ciphertext(&mut first).unwrap(), 1);
+        assert!(engine.wants_write());
+
+        let mut remainder = [0_u8; 4096];
+        assert!(engine.drain_ciphertext(&mut remainder).unwrap() > 0);
+        assert!(!engine.wants_write());
+    }
+
+    #[test]
+    fn application_data_is_rejected_before_handshake_completion() {
+        let mut engine = TlsClientEngine::new(client_config(), server_name()).unwrap();
+
+        assert!(matches!(
+            engine.write_plaintext(b"TURN Allocate"),
+            Err(TlsEngineError::HandshakeIncomplete)
+        ));
+    }
+
+    #[test]
+    fn oversized_ciphertext_chunk_is_rejected() {
+        let mut engine = TlsClientEngine::new(client_config(), server_name()).unwrap();
+        let input = std::vec![0_u8; MAX_TLS_CIPHERTEXT_INPUT + 1];
+
+        assert!(matches!(
+            engine.feed_ciphertext(&input),
+            Err(TlsEngineError::CiphertextInputTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn early_data_configuration_is_rejected() {
+        let mut config = ClientConfig::builder()
+            .with_root_certificates(RootCertStore::empty())
+            .with_no_client_auth();
+        config.enable_early_data = true;
+
+        assert!(matches!(
+            TlsClientEngine::new(Arc::new(config), server_name()),
+            Err(TlsEngineError::EarlyDataEnabled)
+        ));
+    }
+}
