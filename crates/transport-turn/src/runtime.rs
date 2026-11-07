@@ -464,7 +464,11 @@ mod tests {
             )
             .unwrap();
 
-        assert!(runtime.next_deadline().is_some_and(|deadline| deadline > later));
+        assert!(
+            runtime
+                .next_deadline()
+                .is_some_and(|deadline| deadline > later)
+        );
     }
 
     #[test]
