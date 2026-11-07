@@ -40,10 +40,7 @@ class MainActivity : Activity() {
         val stopTun = Button(this).apply {
             text = getString(R.string.vpn_stop)
             setOnClickListener {
-                startService(
-                    Intent(this@MainActivity, GhonchaVpnService::class.java)
-                        .setAction(GhonchaVpnService.ACTION_STOP),
-                )
+                stopService(Intent(this@MainActivity, GhonchaVpnService::class.java))
                 status.text = getString(R.string.vpn_tun_stopped)
             }
         }
