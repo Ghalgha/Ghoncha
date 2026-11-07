@@ -13,6 +13,26 @@ import java.math.BigDecimal
  * provider boundary and deliberately avoids data-class toString() on secrets.
  */
 internal object VkCallsResponseParser {
+    /** Parses the success envelope for calls.getAnonymousToken after CAPTCHA retry. */
+    fun parseAnonymousToken(body: ByteArray): VkCallsResult {
+        if (body.isEmpty() || body.size > MAX_RESPONSE_BYTES) {
+            return VkCallsResult.InvalidResponse
+        }
+        val root = try {
+            JSONObject(body.toString(Charsets.UTF_8))
+        } catch (_: Exception) {
+            return VkCallsResult.InvalidResponse
+        }
+        val error = root.optJSONObject("error")
+        if (error != null) return parseError(error)
+        val payload = root.optJSONObject("response")
+            ?: return VkCallsResult.InvalidResponse
+        val token = payload.optString("token")
+            .takeIf { it.isNotBlank() && it != "null" }
+            ?: return VkCallsResult.InvalidResponse
+        return VkCallsResult.AnonymousToken(token)
+    }
+
     fun parse(body: ByteArray): VkCallsResult {
         if (body.isEmpty() || body.size > MAX_RESPONSE_BYTES) {
             return VkCallsResult.InvalidResponse
@@ -137,6 +157,8 @@ internal sealed class VkCallsResult {
         val captchaTs: String?,
         val captchaAttempt: String?,
     ) : VkCallsResult()
+
+    class AnonymousToken(val token: String) : VkCallsResult()
 
     object RateLimited : VkCallsResult()
     object ChallengeCancelled : VkCallsResult()
