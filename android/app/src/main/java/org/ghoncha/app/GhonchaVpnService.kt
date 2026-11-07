@@ -77,11 +77,16 @@ class GhonchaVpnService : VpnService() {
                 updateNotification()
             } catch (failure: Throwable) {
                 descriptor?.close()
-                tunHandle?.close()
-                tunHandle = null
-                android.util.Log.e(TAG, "Unable to establish the local TUN interface", failure)
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                try {
+                    tunHandle?.close()
+                } catch (closeFailure: Throwable) {
+                    failure.addSuppressed(closeFailure)
+                } finally {
+                    tunHandle = null
+                    android.util.Log.e(TAG, "Unable to establish the local TUN interface", failure)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
             }
         }
     }
@@ -90,9 +95,14 @@ class GhonchaVpnService : VpnService() {
         val handle = synchronized(stateLock) {
             tunHandle.also { tunHandle = null }
         }
-        handle?.close()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        try {
+            handle?.close()
+        } catch (failure: Throwable) {
+            android.util.Log.e(TAG, "Unable to close the native TUN handle", failure)
+        } finally {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
     override fun onRevoke() {
@@ -104,11 +114,20 @@ class GhonchaVpnService : VpnService() {
         val handle = synchronized(stateLock) {
             tunHandle.also { tunHandle = null }
         }
-        handle?.close()
-        networkMonitor?.close()
-        networkMonitor = null
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        super.onDestroy()
+        try {
+            handle?.close()
+        } catch (failure: Throwable) {
+            android.util.Log.e(TAG, "Unable to close the native TUN handle during destruction", failure)
+        }
+        try {
+            networkMonitor?.close()
+        } catch (failure: Throwable) {
+            android.util.Log.e(TAG, "Unable to unregister underlay network monitor", failure)
+        } finally {
+            networkMonitor = null
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            super.onDestroy()
+        }
     }
 
     private fun startForegroundCompat(notification: Notification) {
