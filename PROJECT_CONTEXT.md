@@ -676,7 +676,7 @@ Ghoncha в целом не считается полноценным VPN до п
 ### 21.3. Инженерные решения для Ghoncha
 
 1. Не добавлять в Ghoncha намеренно фиктивные keepalive, повреждённые DTLS/SRTP последовательности или обходные модификации ради подгонки под гипотетические сигнатуры.
-2. Реализовать корректный ICE/TURN/DTLS-SRTP lifecycle и проверять его по RFC и независимым interoperability tests.
+2. Реализовать только те протокольные слои, которые фактически используются выбранным VK Calls TURN режимом. TURN allocation/Refresh, permissions и ChannelBind проверять по RFC 8656; ICE connectivity/consent freshness применять только если конкретная интеграция действительно использует ICE; DTLS-SRTP реализовывать только если подтверждено, что он является частью фактического media/data path. Не переносить требования WebRTC на произвольный TURN payload.
 3. Не использовать отсутствие наблюдаемого handshake как основание менять криптографию, отключать проверки или подделывать протокольное состояние.
 4. В диагностике разделять отказ DNS/IP reachability, TURN allocation, ICE/consent, DTLS handshake, SRTP authentication и внутреннего VPN-туннеля.
 5. Проверять false-positive/false-negative только на собственных контролируемых packet captures и тестовых сетях. Не заявлять гарантированную устойчивость к DPI или работу в сетях белых списков.
@@ -725,4 +725,4 @@ Ghoncha в целом не считается полноценным VPN до п
 
 ### 23.4. Проверяемая нормативная база
 
-На дату этого обновления базовые ориентиры включают RFC 8827 (WebRTC Security Architecture), RFC 8835 (Transports for WebRTC), RFC 5764 (DTLS Extension to Establish Keys for SRTP) и RFC 7675 (STUN Usage for Consent Freshness). В частности, RFC 8827 требует защищать media через SRTP/SRTCP и описывает необходимость ICE consent; RFC 7675 определяет аутентифицированный STUN Binding Request/Response и 30-секундный срок consent. Реализацию сверять с актуальными редакциями RFC и опубликованными errata перед каждой соответствующей подсистемой.
+На дату этого обновления базовые ориентиры включают RFC 8656 (TURN), RFC 8827 (WebRTC Security Architecture), RFC 8835 (Transports for WebRTC), RFC 5764 (DTLS Extension to Establish Keys for SRTP) и RFC 7675 (STUN Usage for Consent Freshness). RFC 8656 задаёт независимые жизненные циклы: TURN allocation по умолчанию 600 секунд с Refresh примерно за минуту до истечения, permissions — 300 секунд, ChannelBind — 600 секунд; ChannelBind одновременно обновляет permission. RFC 7675 задаёт ICE consent freshness с аутентифицированным STUN Binding Request/Response и 30-секундным сроком consent; это не заменяет TURN Refresh/permission/ChannelBind и не должно добавляться к не-ICE транспортам автоматически. RFC 8827/8835/5764 относятся к WebRTC security/media transport; применять их только к подтверждённым WebRTC слоям. Реализацию сверять с актуальными редакциями RFC и опубликованными errata перед каждой соответствующей подсистемой.
