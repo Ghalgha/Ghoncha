@@ -833,6 +833,9 @@ impl<
         if buffer.is_empty() {
             return Err(TurnTcpDriverError::Queue(TurnTcpQueueError::EmptyFrame));
         }
+        if self.engine.buffered_drain_required {
+            return Err(TurnTcpDriverError::Turn(TurnTcpError::BufferedDataPending));
+        }
         let read_buffer_len = buffer.len().min(MAX_TURN_TCP_INPUT_CHUNK);
 
         match self.socket.read(&mut buffer[..read_buffer_len]) {
@@ -1109,14 +1112,16 @@ mod driver_tests {
             driver.receive_one(&mut buffer, MonotonicTime(1)).unwrap(),
             TurnTcpDriverReceive::Data(TurnReceiveResult::Handled)
         ));
+        driver.socket.read_data = alloc::vec![0x55];
         assert!(matches!(
             driver.receive_one(&mut buffer, MonotonicTime(2)),
             Err(TurnTcpDriverError::Turn(TurnTcpError::BufferedDataPending))
         ));
+        assert_eq!(driver.socket.read_data, &[0x55]);
         assert!(driver.poll_peer_data(MonotonicTime(2)).unwrap().is_none());
         assert!(matches!(
             driver.receive_one(&mut buffer, MonotonicTime(3)).unwrap(),
-            TurnTcpDriverReceive::WouldBlock
+            TurnTcpDriverReceive::Data(TurnReceiveResult::Handled)
         ));
     }
 
