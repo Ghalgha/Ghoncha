@@ -108,6 +108,7 @@ impl TlsClientEngine {
     /// Whether TLS ciphertext remains to be written to the TCP socket.
     pub fn wants_write(&self) -> bool {
         self.connection.wants_write()
+            || self.pending_offset < self.pending_ciphertext.len()
     }
 
     /// Application data is safe to send only after the handshake is complete
@@ -154,7 +155,9 @@ impl TlsClientEngine {
         Ok(TlsReadProgress {
             ciphertext_consumed: consumed,
             plaintext_available: state.plaintext_bytes_to_read(),
-            ciphertext_pending: state.tls_bytes_to_write(),
+            ciphertext_pending: state
+                .tls_bytes_to_write()
+                .saturating_add(self.pending_ciphertext.len().saturating_sub(self.pending_offset)),
             peer_closed: self.peer_closed,
         })
     }
