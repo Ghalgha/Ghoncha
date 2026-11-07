@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicLong
  */
 internal class NativeTunInterfaceHandle internal constructor(
     handle: Long,
-    private val closeNativeHandle: (Long) -> Boolean = NativeBootstrap::closeTunInterface,
+    private val closeNativeHandle: (Long) -> Boolean = { NativeBootstrap.closeTunInterface(it) },
 ) : Closeable {
     private val nativeHandle = AtomicLong(handle.also {
         require(it > 0) { "Native TUN handle must be positive" }
