@@ -77,6 +77,7 @@ android {
 
 dependencies {
     implementation("org.rustls:rustls-platform-verifier")
+    testImplementation("junit:junit:4.13.2")
 }
 
 val rustWorkspaceDir = rootProject.projectDir.parentFile
