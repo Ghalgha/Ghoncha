@@ -860,6 +860,7 @@ mod tests {
         local: core::net::SocketAddr,
         peer: core::net::SocketAddr,
         writes: std::vec::Vec<u8>,
+        read_data: std::vec::Vec<u8>,
         write_limit: usize,
         eof: bool,
     }
@@ -873,8 +874,13 @@ mod tests {
             self.peer
         }
 
-        fn read(&mut self, _buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
-            if self.eof {
+        fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TurnStreamIoError> {
+            if !self.read_data.is_empty() {
+                let read = buffer.len().min(self.read_data.len());
+                buffer[..read].copy_from_slice(&self.read_data[..read]);
+                self.read_data.drain(..read);
+                Ok(read)
+            } else if self.eof {
                 Ok(0)
             } else {
                 Err(TurnStreamIoError::WouldBlock)
@@ -893,6 +899,7 @@ mod tests {
             local: "192.0.2.10:40000".parse().unwrap(),
             peer: "198.51.100.1:443".parse().unwrap(),
             writes: std::vec::Vec::new(),
+            read_data: std::vec::Vec::new(),
             write_limit,
             eof: false,
         }
@@ -906,6 +913,66 @@ mod tests {
 
         assert_eq!(socket.read(&mut [0_u8; 64]), Err(TurnStreamIoError::Failed));
         assert_eq!(socket.read(&mut [0_u8; 64]), Err(TurnStreamIoError::Failed));
+    }
+
+    #[test]
+    fn tls_stream_socket_completes_verified_handshake_and_exchanges_plaintext() {
+        let mut socket =
+            TlsStreamSocket::new(mock_stream(usize::MAX), trusted_test_client_config(), ServerName::try_from("example.com").unwrap()).unwrap();
+        let mut server = rustls::ServerConnection::new(test_server_config()).unwrap();
+
+        // The adapter emits ClientHello through the underlying byte stream.
+        assert_eq!(
+            socket.read(&mut [0_u8; 64]),
+            Err(TurnStreamIoError::WouldBlock)
+        );
+        let client_hello = std::mem::take(&mut socket.socket.writes);
+        assert!(!client_hello.is_empty());
+        let mut input = std::io::Cursor::new(&client_hello);
+        assert_eq!(server.read_tls(&mut input).unwrap(), client_hello.len());
+        server.process_new_packets().unwrap();
+
+        // Feed the authenticated server flight into the adapter's TCP input.
+        let mut server_flight = std::vec::Vec::new();
+        server.write_tls(&mut server_flight).unwrap();
+        assert!(!server_flight.is_empty());
+        socket.socket.read_data.extend_from_slice(&server_flight);
+        assert_eq!(
+            socket.read(&mut [0_u8; 64]),
+            Err(TurnStreamIoError::WouldBlock)
+        );
+
+        // The adapter must flush the client's Finished before application data.
+        let client_finished = std::mem::take(&mut socket.socket.writes);
+        assert!(!client_finished.is_empty());
+        let mut input = std::io::Cursor::new(&client_finished);
+        assert_eq!(server.read_tls(&mut input).unwrap(), client_finished.len());
+        server.process_new_packets().unwrap();
+        assert!(!server.is_handshaking());
+        assert!(socket.tls().application_data_ready());
+
+        let request = b"TURN Allocate";
+        assert_eq!(socket.write(request).unwrap(), request.len());
+        let request_ciphertext = std::mem::take(&mut socket.socket.writes);
+        assert!(!request_ciphertext.is_empty());
+        let mut input = std::io::Cursor::new(&request_ciphertext);
+        assert_eq!(server.read_tls(&mut input).unwrap(), request_ciphertext.len());
+        server.process_new_packets().unwrap();
+
+        let mut received = [0_u8; 64];
+        let received_len = server.reader().read(&mut received).unwrap();
+        assert_eq!(&received[..received_len], request);
+
+        let response = b"TURN Allocate Success";
+        assert_eq!(server.writer().write(response).unwrap(), response.len());
+        let mut response_ciphertext = std::vec::Vec::new();
+        server.write_tls(&mut response_ciphertext).unwrap();
+        assert!(!response_ciphertext.is_empty());
+        socket.socket.read_data.extend_from_slice(&response_ciphertext);
+
+        let mut plaintext = [0_u8; 64];
+        let plaintext_len = socket.read(&mut plaintext).unwrap();
+        assert_eq!(&plaintext[..plaintext_len], response);
     }
 
     #[test]
