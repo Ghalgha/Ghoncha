@@ -307,10 +307,11 @@ mod tests {
         let mut bytes = std::vec![0_u8; 40 + 9 * 8];
         bytes[0] = 0x60;
         bytes[4..6].copy_from_slice(&72_u16.to_be_bytes());
-        bytes[6] = 0;
-        for index in 0..9 {
+        let extension_types = [43, 60, 135, 139, 140, 43, 60, 135, 139];
+        bytes[6] = extension_types[0];
+        for index in 0..extension_types.len() {
             let offset = 40 + index * 8;
-            bytes[offset] = if index == 8 { 17 } else { 0 };
+            bytes[offset] = extension_types.get(index + 1).copied().unwrap_or(17);
             bytes[offset + 1] = 0;
         }
         let packet = IpPacket::parse(&bytes).unwrap();
@@ -320,7 +321,7 @@ mod tests {
             Err(FlowKeyError::Ipv6ExtensionLimit)
         );
         let fallback = FlowKey::from_packet_with_conservative_fallback(&packet).unwrap();
-        assert_eq!(fallback.protocol, 0);
+        assert_eq!(fallback.protocol, 43);
         assert_eq!(fallback.discriminator, FlowDiscriminator::Network);
     }
 
@@ -471,11 +472,13 @@ mod tests {
         let mut bytes = std::vec![0_u8; 40 + 9 * 8];
         bytes[0] = 0x60;
         bytes[4..6].copy_from_slice(&72_u16.to_be_bytes());
-        bytes[6] = 0;
-        for index in 0..9 {
+        let extension_types = [43, 60, 135, 139, 140, 43, 60, 135, 139];
+        bytes[6] = extension_types[0];
+        for (index, next) in extension_types.iter().enumerate() {
             let offset = 40 + index * 8;
-            bytes[offset] = if index == 8 { 17 } else { 0 };
+            bytes[offset] = extension_types.get(index + 1).copied().unwrap_or(17);
             bytes[offset + 1] = 0;
+            let _ = next;
         }
         assert_eq!(
             FlowKey::from_packet(&IpPacket::parse(&bytes).unwrap()),
