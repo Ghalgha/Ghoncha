@@ -1,6 +1,6 @@
 # GHONCHA transport abstraction
 
-Status: design contract with partial Rust implementation. VK Calls TURN is the primary transport. Generic TURN now has Sans-I/O UDP and TCP engines plus bounded socket-driver primitives; TLS, Android socket integration, credential-provider integration, end-to-end transport selection, and gateway interoperability remain unfinished. The current TCP mode is TURN over TCP with a UDP relay allocation, not RFC 6062 TCP relay. These components are not yet a production-ready fallback. The abstraction exists to add transports without changing the packet engine, tunnel cryptography, Android VPN lifecycle, or server gateway.
+Status: design contract with partial Rust implementation. VK Calls TURN is the primary transport. Generic TURN has Sans-I/O UDP and TCP engines, bounded socket drivers, and a pinned Rustls TLS stream adapter. Android socket integration, platform trust-store integration, credential-provider integration, end-to-end transport selection, and gateway interoperability remain unfinished. The current TCP mode is TURN over TCP with a UDP relay allocation, not RFC 6062 TCP relay. These components are not yet a production-ready fallback. The abstraction exists to add transports without changing the packet engine, tunnel cryptography, Android VPN lifecycle, or server gateway.
 
 ## 1. Architectural rule
 
@@ -23,7 +23,7 @@ Android VpnService / TUN
             -> TURN client / ChannelData
             -> VK TURN relay
        -> Direct UDP adapter (future)
-       -> Generic TURN engine and bounded UDP/TCP drivers (in progress; TLS and Android integration pending)
+       -> Generic TURN engine, bounded UDP/TCP drivers and Rustls TLS stream adapter (in progress; platform integration pending)
        -> MASQUE adapter (future)
        -> other approved adapters
   -> GHONCHA gateway UDP peer socket
@@ -107,7 +107,7 @@ Direct UDP carries the same authenticated GHONCHA records without a TURN allocat
 
 ### 4.3 Generic TURN — in progress
 
-The Rust workspace contains Sans-I/O TURN engines and bounded socket-driver primitives for UDP and TCP client-to-server connections. The TCP engine requests a UDP relay allocation; RFC 6062 TCP relay allocations are not implemented. The stream driver preserves raw TURN framing across partial writes and bounds per-read input, but it is not yet integrated with Android socket creation, network binding, VPN protection, TLS, a credential provider, or the transport selector. Do not advertise TCP/TLS fallback as production-ready until those pieces and end-to-end interoperability tests are complete.
+The Rust workspace contains Sans-I/O TURN engines and bounded socket-driver primitives for UDP and TCP client-to-server connections. The TCP engine requests a UDP relay allocation; RFC 6062 TCP relay allocations are not implemented. The stream driver preserves raw TURN framing across partial writes and bounds per-read input. A pinned Rustls 0.23.46 `TlsClientEngine` and `TlsStreamSocket` now wrap the same stream contract, so `TurnTcpDriver` can operate over TLS without changing TURN framing. The TLS path is still missing a full successful client/server handshake test, platform trust-store integration, Android socket creation/network binding/VPN protection, a credential provider, and transport selection. Do not advertise TCP/TLS fallback as production-ready until those pieces and end-to-end interoperability tests are complete.
 
 A complete generic TURN adapter must obtain credentials from its own provider. It must not depend on VK call lifecycle or VK-specific response schemas.
 
