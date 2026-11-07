@@ -97,7 +97,6 @@ class VkChallengeWebViewActivity : Activity() {
             setSupportMultipleWindows(false)
             safeBrowsingEnabled = true
         }
-        CookieManager.getInstance().setAcceptCookie(true)
         installChallengeObserver()
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
@@ -130,6 +129,7 @@ class VkChallengeWebViewActivity : Activity() {
                 return true
             }
 
+            @android.annotation.TargetApi(27)
             override fun onSafeBrowsingHit(
                 view: WebView,
                 request: WebResourceRequest,
