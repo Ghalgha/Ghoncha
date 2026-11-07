@@ -47,13 +47,13 @@ Ghoncha supports two user-authorized bootstrap paths:
 1. **User-provided call link/hash:** the user supplies a link/hash for a call they are authorized to use. The client derives or fetches temporary call/TURN access material using the implementation's VK Calls integration.
 2. **User-authorized call creation:** where the provider exposes a supported call-management flow, Ghoncha may create and later end its own calls. This requires an explicit user login/consent flow and must be kept separate from the data plane.
 
-Observed code in the supplied repositories uses a mixture of:
-- VK API host/methods and versioned request formats;
+Depending on the currently supported provider flow, integration may involve:
+- versioned VK API host/method request formats;
 - Calls-specific anonymous bootstrap and preview/token methods;
-- the Calls/OK CDN backend to create/join the call and retrieve `turn_server.username`, `turn_server.credential`, and `turn_server.urls`;
-- call hashes/links and, in some variants, account access tokens.
+- call/session creation or joining and retrieval of `turn_server.username`, `turn_server.credential`, and `turn_server.urls`;
+- a user-provided call hash/link or an authorized account session.
 
-Examples of observed method names in source include `auth.getAnonymToken`, `messages.getCallPreview`, `messages.getAnonymCallToken`, `auth.anonymLogin`, and `vchat.joinConversationByLink`. These are source-observed integration details, not a promise that every method is part of the stable public VK API. The public VK API's documented `calls.start` / `calls.forceFinish` management methods are a different layer from the Calls-specific TURN credential bootstrap.
+Method names such as `auth.getAnonymToken`, `messages.getCallPreview`, `messages.getAnonymCallToken`, `auth.anonymLogin`, and `vchat.joinConversationByLink` are provider-integration details, not a promise that every method is part of the stable public VK API. The public VK API's documented `calls.start` / `calls.forceFinish` management methods are a different layer from Calls-specific TURN credential bootstrap.
 
 **Documentation boundary:** official VK API documentation is authoritative only for methods it actually documents. Calls-specific endpoints, request signatures, browser/TLS fingerprints, undocumented payloads, and returned TURN fields must be treated as unstable and independently verified. Do not represent private Calls backend methods as a supported public API. Do not hardcode one API version, host, IP range, or client fingerprint as permanent.
 
