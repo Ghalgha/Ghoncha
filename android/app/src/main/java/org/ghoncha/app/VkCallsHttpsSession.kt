@@ -115,9 +115,17 @@ internal class VkCallsHttpResponse(
     val body: ByteArray,
 )
 
-/**\n * Exact-host allowlist for VK Calls HTTPS endpoints observed in the reference audit.\n * This does not assert that private methods on these hosts are stable public APIs.\n */
+/**
+ * Exact-host allowlist for VK Calls HTTPS endpoints observed in the reference audit.
+ * This does not assert that private methods on these hosts are stable public APIs.
+ */
 internal object VkCallsUrlPolicy {
-    private val ALLOWED_HOSTS = setOf(\n        "api.vk.com",\n        "api.vk.ru",\n        "login.vk.ru",\n        "calls.okcdn.ru",\n    )
+    private val ALLOWED_HOSTS = setOf(
+        "api.vk.com",
+        "api.vk.ru",
+        "login.vk.ru",
+        "calls.okcdn.ru",
+    )
 
     fun allows(value: String): Boolean = try {
         val uri = URI(value)
