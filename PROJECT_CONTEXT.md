@@ -334,7 +334,7 @@ UI не должен содержать протокольную логику, r
 - **[РЕАЛИЗОВАНО]** Документация архитектуры, transport abstraction, VK transport, network state, power efficiency, TLS, packet/MTU и socket contracts.
 
 Ограничения main:
-- нет полного Android VPN lifecycle/data plane: VpnService/TUN groundwork находится в незамёрженных PR №9/10, а TUN пока не обрабатывает пакеты;
+- Android underlay network monitor уже находится в main после merge PR №9; VpnService/TUN lifecycle находится в PR №10, а TUN пока не обрабатывает пакеты;
 - нет end-to-end VPN data path;
 - нет VK credential provider и live VK Calls TURN adapter;
 - нет DTLS-SRTP/SRTP production implementation;
@@ -365,10 +365,10 @@ CI PR №4 прошёл: Rust format/Clippy/workspace tests и Android debug bui
 Ветка: `work/heap-backed-turn-queues-main`  
 HEAD: `0f0d2c9972eb97d1e4391f36bea1de99c69e7d86`  
 PR: https://github.com/Ghalgha/Ghoncha/pull/8  
-Основан непосредственно на `main`. Состояние: открыт, ready for review; **CI PASS**; не слит.
+Основан непосредственно на `main`. Состояние: **слит в main через squash**; CI PASS. Merge commit: `db03aa084f544c1f2f58237fee85500a6402b977`.
 
-- **[РЕАЛИЗОВАНО В PR №8]** Heap-backed bounded TURN send queues с сохранением compile-time record/byte limits.
-- **[РЕАЛИЗОВАНО В PR №8]** Fallible queue allocation и `TurnError::AllocationFailed` в `TurnUdpDriver::new`.
+- **[РЕАЛИЗОВАНО]** Heap-backed bounded TURN send queues с сохранением compile-time record/byte limits.
+- **[РЕАЛИЗОВАНО]** Fallible queue allocation и `TurnError::AllocationFailed` в `TurnUdpDriver::new`.
 - **[CI PASS]** Rust format, Clippy, workspace tests и Android debug build.
 - PR №5 и PR №6 закрыты без слияния; PR №8 — чистая main-based замена PR №6.
 
@@ -377,12 +377,12 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/8
 Ветка: `work/android-underlay-network-monitor-main`  
 HEAD: `62e7a65a5c7df79f4a96a7c5fb422b6921ab661d`  
 PR: https://github.com/Ghalgha/Ghoncha/pull/9  
-Основан непосредственно на `main`. Состояние: открыт, ready for review; **все CI задачи прошли**; не слит.
+Основан непосредственно на `main`. Состояние: **слит в main через merge commit**; все CI задачи прошли. Merge commit: `53ce92bc33d1bde7dc227d412918d5018cda5483`.
 
-- **[РЕАЛИЗОВАНО В PR №9]** Монитор кандидатов с `NET_CAPABILITY_INTERNET` и `NET_CAPABILITY_NOT_VPN`; автоматический выбор preferred network намеренно не выполняется.
-- **[РЕАЛИЗОВАНО В PR №9]** Snapshot capabilities, validation, metering и transport flags.
-- **[РЕАЛИЗОВАНО В PR №9]** Monotonic per-network generation invalidation при изменении capabilities/link properties и потере сети.
-- **[РЕАЛИЗОВАНО В PR №9]** Unit tests для generation registry.
+- **[РЕАЛИЗОВАНО]** Монитор кандидатов с `NET_CAPABILITY_INTERNET` и `NET_CAPABILITY_NOT_VPN`; автоматический выбор preferred network намеренно не выполняется.
+- **[РЕАЛИЗОВАНО]** Snapshot capabilities, validation, metering и transport flags.
+- **[РЕАЛИЗОВАНО]** Monotonic per-network generation invalidation при изменении capabilities/link properties и потере сети.
+- **[РЕАЛИЗОВАНО]** Unit tests для generation registry.
 - В PR №9 добавлен CI trigger для следующей stacked ветки PR №10.
 - PR содержит 5 файлов, включая workflow trigger.
 - Device-level handover не проверен.
@@ -391,9 +391,9 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/9
 ### 14.5. PR №10 — Android VpnService и TUN descriptor lifecycle
 
 Ветка: `work/android-vpnservice-tun-lifecycle-v2`  
-HEAD: `a91a56966295770141d98bcc30d78aa6fd9a5489`  
+HEAD: `fd8b39bf2484478a4381e6c9c86cda906d84df6e`  
 PR: https://github.com/Ghalgha/Ghoncha/pull/10  
-Основан на PR №9 (stacked). Состояние: открыт draft; Rust format/Clippy/workspace tests прошли; Android debug build выполняется; не слит.
+После merge PR №9 перенаправлен на `main`. Состояние: открыт draft; последний CI run `42393331923` выполняется. Предыдущий run `42392354954` выявил Kotlin compile error: `Os.close(Int)` ожидал `FileDescriptor`; исправлено на закрытие через `ParcelFileDescriptor.adoptFd()`, новый CI запущен.
 
 - **[РЕАЛИЗОВАНО В PR №10]** Android `VpnService` declaration, VPN consent flow и foreground notification lifecycle.
 - **[РЕАЛИЗОВАНО В PR №10]** Локальный TUN с IPv4 host address, без IP routes и без перехвата пользовательского трафика.
@@ -533,8 +533,8 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/10
 
 Не заявлять тест успешным, если он не запускался или его результат неизвестен. Разделять CI, локальные тесты, integration tests и device tests.
 
-### 17.4. Полный аудит каждые 16 шагов
-После каждых **16 завершённых существенных шагов разработки** выполнить полный внутренний аудит проекта. Аудит не является отдельным пользовательским уведомлением и не требует прерывать обычный ход работы ради отчёта.
+### 17.4. Полный аудит каждые 50 шагов
+После каждых **50 завершённых существенных шагов разработки** выполнить полный внутренний аудит проекта. Аудит не является отдельным пользовательским уведомлением и не требует прерывать обычный ход работы ради отчёта.
 
 Полный аудит включает:
 - сверку фактического кода с архитектурой и этим контекстом;
@@ -550,7 +550,10 @@ PR: https://github.com/Ghalgha/Ghoncha/pull/10
 
 Счётчик увеличивается только после завершённого логического шага с проверками. Исправление документа без изменения реализации само по себе не считается шагом разработки. После аудита продолжать последовательную работу; сообщать пользователю только обычный запрошенный результат, если он отдельно не попросил аудит.
 
-### 17.5. Обновление PROJECT_CONTEXT.md
+### 17.5. Периодическая проверка PROJECT_CONTEXT.md
+Проверять актуальность, согласованность статусов, архитектуры, roadmap и фактического состояния `main`/PR каждые **20 завершённых существенных шагов разработки**. Проверка не заменяет немедленное исправление документа при подтверждённом изменении фактов.
+
+### 17.6. Обновление PROJECT_CONTEXT.md
 Этот файл — живой источник истины, а не документ, который обновляется только в конце проекта.
 
 Обновлять его обязательно:
@@ -599,12 +602,12 @@ GHONCHA в целом не считается полноценным VPN до п
 
 ## 20. Последняя проверка и открытые ограничения
 
-Кодовый аудит обновлён после merge PR №4 (`202af0e618c1da676add6912c99afd7a61f1bb30`). `PROJECT_CONTEXT.md` является каноническим документом и редактируется только в корне ветки `main`; не добавлять его в PR diff и не вносить в него изменения из рабочих веток. Изменения контекста вносить непосредственно в `main`.
+Состояние проверено после merge PR №8 (`db03aa084f544c1f2f58237fee85500a6402b977`) и PR №9 (`53ce92bc33d1bde7dc227d412918d5018cda5483`). `PROJECT_CONTEXT.md` является каноническим документом и редактируется только в корне ветки `main`; не добавлять его в PR diff и не вносить в него изменения из рабочих веток. Изменения контекста вносить непосредственно в `main`.
 
-- PR №4 слит в main; CI на его HEAD прошёл.
-- PR №8 и PR №9 CI прошли полностью; PR №10: Rust CI прошёл, Android debug build выполняется.
+- PR №4, PR №8 и PR №9 слиты в main; CI для PR №8/9 прошёл полностью.
+- PR №10 остаётся draft; последний CI run `42393331923` выполняется после исправления Kotlin compile error. Предыдущий run завершился ошибкой `Os.close(Int)`.
 - Успешный CI не доказывает работу на физическом устройстве, совместимость с живым VK TURN relay, корректность маршрута в ограниченной сети или наличие end-to-end VPN.
 - PR №2 и PR №3 остаются отдельными открытыми изменениями и не включены в статус `main`.
 - `PROJECT_CONTEXT.md` — единственная каноническая копия в `main`; отсутствие этого файла в остальных ветках является намеренным.
 
-**Текущая последовательность:** завершить CI/review PR №8 и PR №9; после готовности запросить разрешение на merge. Затем завершить PR №10 (VpnService/TUN ownership). После этого реализовать native multi-allocation TURN runtime и связать его с TUN readiness; не объявлять VPN рабочим до end-to-end теста.
+**Текущая последовательность:** завершить CI и review PR №10 (VpnService/TUN ownership), затем провести device-level lifecycle verification. После этого реализовать native multi-allocation TURN runtime и связать его с TUN readiness; не объявлять VPN рабочим до end-to-end теста.
