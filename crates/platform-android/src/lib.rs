@@ -282,4 +282,7 @@ mod android {
 }
 
 #[cfg(target_os = "android")]
-pub use android::{platform_tls_client_config, take_udp_socket};
+pub use android::{
+    platform_tls_client_config, take_android_udp_socket, take_udp_socket,
+    AndroidSocketAdoptionError, AndroidUdpSocket,
+};
