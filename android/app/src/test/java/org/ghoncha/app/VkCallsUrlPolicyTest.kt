@@ -6,7 +6,7 @@ import org.junit.Test
 
 class VkCallsUrlPolicyTest {
     @Test
-    fun acceptsOnlyVkApiHttpsOrigin() {
+    fun acceptsObservedVkCallsHttpsHosts() {
         assertTrue(VkCallsUrlPolicy.allows("https://api.vk.com/method/calls.getAnonymousToken"))\n        assertTrue(VkCallsUrlPolicy.allows("https://api.vk.ru/method/calls.getAnonymousToken"))\n        assertTrue(VkCallsUrlPolicy.allows("https://login.vk.ru/?act=get_anonym_token"))\n        assertTrue(VkCallsUrlPolicy.allows("https://calls.okcdn.ru/fb.do?method=auth.anonymLogin"))
         assertTrue(VkCallsUrlPolicy.allows("https://API.VK.COM:443/method/example"))
     }
